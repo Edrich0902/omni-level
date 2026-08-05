@@ -26,13 +26,14 @@ enum SpotifyController {
         NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.icon
     }
 
-    /// Returns track metadata if Spotify is running. Nil script result = not running / not ok.
+    /// Returns track metadata if Spotify is running.
     static func fetchState() -> State? {
         guard isRunning else { return nil }
 
         let script = """
         tell application "Spotify"
-            if not running then return "|||||"
+            if not running then return ""
+            set US to ASCII character 31
             set t to name of current track
             set a to artist of current track
             set al to album of current track
@@ -40,12 +41,13 @@ enum SpotifyController {
             set p to player state as string
             set pos to player position
             set dur to duration of current track
-            return t & "|||" & a & "|||" & al & "|||" & art & "|||" & p & "|||" & pos & "|||" & dur
+            return t & US & a & US & al & US & art & US & p & US & pos & US & dur
         end tell
         """
-        guard let raw = runAppleScript(script) else { return nil }
-        let parts = raw.components(separatedBy: "|||")
+        guard let raw = runAppleScript(script), !raw.isEmpty else { return nil }
+        let parts = raw.components(separatedBy: "\u{001F}")
         guard parts.count >= 7 else { return nil }
+
         let title = parts[0]
         let artist = parts[1]
         let album = parts[2]
@@ -53,7 +55,6 @@ enum SpotifyController {
         let state = parts[4].lowercased()
         if title.isEmpty && artist.isEmpty { return nil }
 
-        // Spotify reports duration in milliseconds, position in seconds.
         let position = TimeInterval(parts[5].replacingOccurrences(of: ",", with: ".")) ?? 0
         let durationRaw = TimeInterval(parts[6].replacingOccurrences(of: ",", with: ".")) ?? 0
         let duration = durationRaw > 10_000 ? durationRaw / 1000.0 : durationRaw
@@ -73,7 +74,6 @@ enum SpotifyController {
     static func nextTrack() { runAppleScript("tell application \"Spotify\" to next track") }
     static func previousTrack() { runAppleScript("tell application \"Spotify\" to previous track") }
 
-    /// Seeks to an absolute position in seconds.
     static func setPosition(_ seconds: TimeInterval) {
         let clamped = max(0, seconds)
         runAppleScript("tell application \"Spotify\" to set player position to \(clamped)")

@@ -55,6 +55,8 @@
 		C1NOTCH004BF00000000004 /* NotchNowPlayingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1NOTCH004FR00000000004 /* NotchNowPlayingController.swift */; };
 		C1NOTCH005BF00000000005 /* NotchNowPlayingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1NOTCH005FR00000000005 /* NotchNowPlayingView.swift */; };
 		C1SEEK001BF00000000001 /* NowPlayingSeekBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1SEEK001FR00000000001 /* NowPlayingSeekBar.swift */; };
+		C1AUTOEQ001BF00000000001 /* AutoEQLibraryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1AUTOEQ001FR00000000001 /* AutoEQLibraryService.swift */; };
+		C1AUTOEQ002BF00000000002 /* AutoEQLibrarySheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1AUTOEQ002FR00000000002 /* AutoEQLibrarySheet.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -110,6 +112,8 @@
 		C1NOTCH004FR00000000004 /* NotchNowPlayingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchNowPlayingController.swift; sourceTree = "<group>"; };
 		C1NOTCH005FR00000000005 /* NotchNowPlayingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchNowPlayingView.swift; sourceTree = "<group>"; };
 		C1SEEK001FR00000000001 /* NowPlayingSeekBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingSeekBar.swift; sourceTree = "<group>"; };
+		C1AUTOEQ001FR00000000001 /* AutoEQLibraryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoEQLibraryService.swift; sourceTree = "<group>"; };
+		C1AUTOEQ002FR00000000002 /* AutoEQLibrarySheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoEQLibrarySheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -236,6 +240,7 @@
 				C1NOWPLAY002FR00000000002 /* MediaRemoteBridge.swift */,
 				C1NOWPLAY003FR00000000003 /* SpotifyController.swift */,
 				C1NOWPLAY004FR00000000004 /* NowPlayingService.swift */,
+				C1AUTOEQ001FR00000000001 /* AutoEQLibraryService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -250,6 +255,7 @@
 				E15F14FC5C87417F82F84DFF /* EqualizerViewModel.swift */,
 				C1NOTCH000GR00000000000 /* Notch */,
 				C1NOWPLAY005FR00000000005 /* NowPlayingView.swift */,
+				C1AUTOEQ002FR00000000002 /* AutoEQLibrarySheet.swift */,
 				FA12410F83E042BF9911384B /* VisualizerView.swift */,
 			);
 			path = UI;
@@ -388,6 +394,8 @@
 				C1NOTCH004BF00000000004 /* NotchNowPlayingController.swift in Sources */,
 				C1NOTCH005BF00000000005 /* NotchNowPlayingView.swift in Sources */,
 				C1SEEK001BF00000000001 /* NowPlayingSeekBar.swift in Sources */,
+				C1AUTOEQ001BF00000000001 /* AutoEQLibraryService.swift in Sources */,
+				C1AUTOEQ002BF00000000002 /* AutoEQLibrarySheet.swift in Sources */,
 				15DEB2CEFCF948B4BA18D9FC /* DSPValidation.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

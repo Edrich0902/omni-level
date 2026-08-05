@@ -57,7 +57,7 @@ enum MediaRemoteBridge {
             }
             sem.signal()
         }
-        _ = sem.wait(timeout: .now() + 1.5)
+        _ = sem.wait(timeout: .now() + 0.6)
         return result
     }
 
@@ -69,7 +69,7 @@ enum MediaRemoteBridge {
             result = pid == 0 ? nil : pid_t(pid)
             sem.signal()
         }
-        _ = sem.wait(timeout: .now() + 1.0)
+        _ = sem.wait(timeout: .now() + 0.4)
         return result
     }
 
@@ -83,7 +83,7 @@ enum MediaRemoteBridge {
             result = playing
             sem.signal()
         }
-        _ = sem.wait(timeout: .now() + 1.0)
+        _ = sem.wait(timeout: .now() + 0.4)
         return result
     }
 

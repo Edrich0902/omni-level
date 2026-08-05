@@ -21,8 +21,8 @@ final class NowPlayingService: ObservableObject {
     func start() {
         stop()
         Task { await refresh() }
-        // Adaptive: 1s when playing, slower when idle (reapplied each refresh).
-        scheduleTimer(interval: 1.0)
+        // Adaptive polling while media is active; idle path slows the timer further.
+        scheduleTimer(interval: 1.4)
     }
 
     func stop() {
@@ -88,7 +88,7 @@ final class NowPlayingService: ObservableObject {
             }
         } else {
             if consecutiveIdlePolls > 0 {
-                scheduleTimer(interval: 1.0)
+                scheduleTimer(interval: 1.4)
             }
             consecutiveIdlePolls = 0
         }
@@ -115,31 +115,37 @@ final class NowPlayingService: ObservableObject {
     }
 
     func togglePlayPause(_ item: NowPlayingItem) {
-        switch item.source {
-        case .spotify:
-            SpotifyController.togglePlayPause()
-        case .system:
-            _ = MediaRemoteBridge.send(.togglePlayPause)
+        Task.detached(priority: .userInitiated) {
+            switch item.source {
+            case .spotify:
+                SpotifyController.togglePlayPause()
+            case .system:
+                _ = MediaRemoteBridge.send(.togglePlayPause)
+            }
         }
         scheduleQuickRefresh()
     }
 
     func next(_ item: NowPlayingItem) {
-        switch item.source {
-        case .spotify:
-            SpotifyController.nextTrack()
-        case .system:
-            _ = MediaRemoteBridge.send(.nextTrack)
+        Task.detached(priority: .userInitiated) {
+            switch item.source {
+            case .spotify:
+                SpotifyController.nextTrack()
+            case .system:
+                _ = MediaRemoteBridge.send(.nextTrack)
+            }
         }
         scheduleQuickRefresh()
     }
 
     func previous(_ item: NowPlayingItem) {
-        switch item.source {
-        case .spotify:
-            SpotifyController.previousTrack()
-        case .system:
-            _ = MediaRemoteBridge.send(.previousTrack)
+        Task.detached(priority: .userInitiated) {
+            switch item.source {
+            case .spotify:
+                SpotifyController.previousTrack()
+            case .system:
+                _ = MediaRemoteBridge.send(.previousTrack)
+            }
         }
         scheduleQuickRefresh()
     }
@@ -147,19 +153,16 @@ final class NowPlayingService: ObservableObject {
     func seek(_ item: NowPlayingItem, to seconds: TimeInterval) {
         guard let duration = item.duration, duration > 0 else { return }
         let clamped = min(max(seconds, 0), duration)
-        switch item.source {
-        case .spotify:
-            SpotifyController.setPosition(clamped)
-            if let idx = players.firstIndex(where: { $0.id == item.id }) {
-                players[idx].position = clamped
-                players[idx].progressSampledAt = .now
-            }
-        case .system:
-            if MediaRemoteBridge.seek(to: clamped) {
-                if let idx = players.firstIndex(where: { $0.id == item.id }) {
-                    players[idx].position = clamped
-                    players[idx].progressSampledAt = .now
-                }
+        if let idx = players.firstIndex(where: { $0.id == item.id }) {
+            players[idx].position = clamped
+            players[idx].progressSampledAt = .now
+        }
+        Task.detached(priority: .userInitiated) {
+            switch item.source {
+            case .spotify:
+                SpotifyController.setPosition(clamped)
+            case .system:
+                _ = MediaRemoteBridge.seek(to: clamped)
             }
         }
         scheduleQuickRefresh()
@@ -168,9 +171,8 @@ final class NowPlayingService: ObservableObject {
     private func scheduleQuickRefresh() {
         refreshTask?.cancel()
         refreshTask = Task {
-            try? await Task.sleep(nanoseconds: 200_000_000)
+            try? await Task.sleep(nanoseconds: 280_000_000)
             guard !Task.isCancelled else { return }
-            // Bypass single-flight only after transport by resetting isRefreshing wait.
             await refresh()
         }
     }
@@ -180,9 +182,10 @@ final class NowPlayingService: ObservableObject {
     private func fetchSpotify() async -> NowPlayingItem? {
         guard SpotifyController.isRunning else { return nil }
 
-        let state: SpotifyController.State? = await Task.detached(priority: .utility) {
+        // AppleScript can hang; race against a short timeout so poll cycles never wedge.
+        let state = await timedFetch(seconds: 0.85) {
             SpotifyController.fetchState()
-        }.value
+        }
         guard let state else { return nil }
 
         var art = artworkCache[state.artworkURL ?? ""]
@@ -211,6 +214,22 @@ final class NowPlayingService: ObservableObject {
         )
     }
 
+    /// Runs blocking work off the main actor and abandons it after `seconds` (result may arrive later unused).
+    private func timedFetch<T: Sendable>(
+        seconds: Double,
+        work: @escaping @Sendable () -> T?
+    ) async -> T? {
+        await withCheckedContinuation { continuation in
+            let gate = OnceResumeBox<T?>()
+            DispatchQueue.global(qos: .utility).async {
+                gate.resume(continuation, with: work())
+            }
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + seconds) {
+                gate.resume(continuation, with: nil)
+            }
+        }
+    }
+
     // MARK: - System MediaRemote
 
     private struct MediaRemoteSnapshot: Sendable {
@@ -228,8 +247,7 @@ final class NowPlayingService: ObservableObject {
     private func fetchSystemNowPlaying(excludingSpotifyIfPresent: Bool) async -> NowPlayingItem? {
         guard MediaRemoteBridge.isAvailable else { return nil }
 
-        let snapshot: MediaRemoteSnapshot? = await Task.detached(priority: .utility) {
-            // Fetch sequentially on the utility queue — still off main; avoids Sendable bridging of CF dicts.
+        let snapshot: MediaRemoteSnapshot? = await timedFetch(seconds: 1.2) { () -> MediaRemoteSnapshot? in
             guard let info = MediaRemoteBridge.fetchNowPlayingInfoSync() else { return nil }
             let pid = MediaRemoteBridge.fetchApplicationPIDSync()
             let isPlaying = MediaRemoteBridge.fetchIsPlayingSync()
@@ -266,7 +284,7 @@ final class NowPlayingService: ObservableObject {
                 duration: duration,
                 playbackRate: rate
             )
-        }.value
+        }
 
         guard let snapshot else { return nil }
 
@@ -343,6 +361,20 @@ final class NowPlayingService: ObservableObject {
             log.debug("artwork fetch failed: \(error.localizedDescription, privacy: .public)")
             return nil
         }
+    }
+}
+
+/// Ensures a checked continuation is resumed exactly once.
+private final class OnceResumeBox<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didResume = false
+
+    func resume(_ continuation: CheckedContinuation<T, Never>, with value: T) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !didResume else { return }
+        didResume = true
+        continuation.resume(returning: value)
     }
 }
 

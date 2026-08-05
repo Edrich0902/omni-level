@@ -3,17 +3,21 @@ import SwiftUI
 // MARK: - Design tokens
 
 enum OmniTheme {
-    static let accent = Color(red: 0.35, green: 0.78, blue: 0.88)
-    static let accentDeep = Color(red: 0.22, green: 0.62, blue: 0.72)
-    static let mint = Color(red: 0.45, green: 0.86, blue: 0.72)
-    static let coral = Color(red: 0.96, green: 0.52, blue: 0.38)
+    /// Spotify green accent.
+    static let accent = Color(red: 0.114, green: 0.725, blue: 0.329)
+    static let accentDeep = Color(red: 0.08, green: 0.52, blue: 0.24)
+    static let mint = Color(red: 0.30, green: 0.90, blue: 0.52)
+    static let coral = Color(red: 0.96, green: 0.42, blue: 0.38)
     static let amber = Color(red: 0.98, green: 0.78, blue: 0.32)
-    static let textPrimary = Color.white.opacity(0.92)
-    static let textSecondary = Color.white.opacity(0.55)
-    static let stroke = Color.white.opacity(0.18)
-    static let strokeSoft = Color.white.opacity(0.10)
-    static let fill = Color.white.opacity(0.06)
-    static let fillStrong = Color.white.opacity(0.10)
+    static let textPrimary = Color.white.opacity(0.94)
+    static let textSecondary = Color.white.opacity(0.52)
+    static let stroke = Color.white.opacity(0.14)
+    static let strokeSoft = Color.white.opacity(0.08)
+    static let fill = Color.white.opacity(0.055)
+    static let fillStrong = Color.white.opacity(0.09)
+    /// Near-black base layers for a dark Spotify-like surface.
+    static let bgDeep = Color(red: 0.04, green: 0.05, blue: 0.05)
+    static let bgMid = Color(red: 0.07, green: 0.08, blue: 0.08)
 }
 
 // MARK: - NSVisualEffect glass host
@@ -55,9 +59,9 @@ struct GlassCardModifier: ViewModifier {
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(0.12),
-                                    Color.white.opacity(0.03),
-                                    Color.clear
+                                    Color.white.opacity(0.08),
+                                    OmniTheme.accent.opacity(0.04),
+                                    Color.black.opacity(0.18)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -67,9 +71,9 @@ struct GlassCardModifier: ViewModifier {
                         .strokeBorder(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(0.35),
+                                    OmniTheme.accent.opacity(0.35),
                                     Color.white.opacity(0.08),
-                                    Color.white.opacity(0.18)
+                                    OmniTheme.accent.opacity(0.14)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -91,55 +95,62 @@ extension View {
 struct GlassBackground: View {
     var body: some View {
         ZStack {
-            // withinWindow material so liquid glass reads clearly inside NSPopover
-            VisualEffectBackground(material: .sidebar, blendingMode: .withinWindow)
+            // Deep black glass base
+            VisualEffectBackground(material: .hudWindow, blendingMode: .withinWindow)
                 .ignoresSafeArea()
 
-            // Atmospheric depth wash
+            OmniTheme.bgDeep.opacity(0.72)
+                .ignoresSafeArea()
+
+            // Subtle black depth
             LinearGradient(
                 colors: [
-                    Color(red: 0.10, green: 0.16, blue: 0.20).opacity(0.45),
-                    Color(red: 0.06, green: 0.09, blue: 0.12).opacity(0.55),
-                    Color(red: 0.07, green: 0.13, blue: 0.15).opacity(0.48)
+                    Color.black.opacity(0.55),
+                    OmniTheme.bgMid.opacity(0.45),
+                    Color.black.opacity(0.72)
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
             .ignoresSafeArea()
 
-            // Soft light orbs (static — no continuous animation under the whole tree)
+            // Spotify green liquid wash
             Circle()
                 .fill(
                     RadialGradient(
-                        colors: [OmniTheme.accent.opacity(0.28), .clear],
+                        colors: [OmniTheme.accent.opacity(0.34), OmniTheme.accent.opacity(0.06), .clear],
                         center: .center,
-                        startRadius: 10,
-                        endRadius: 180
+                        startRadius: 8,
+                        endRadius: 200
                     )
                 )
-                .frame(width: 320, height: 320)
-                .offset(x: 8, y: -60)
-                .blur(radius: 8)
+                .frame(width: 340, height: 340)
+                .offset(x: 30, y: -90)
+                .blur(radius: 10)
 
             Circle()
                 .fill(
                     RadialGradient(
-                        colors: [OmniTheme.mint.opacity(0.18), .clear],
+                        colors: [OmniTheme.accentDeep.opacity(0.28), .clear],
                         center: .center,
-                        startRadius: 5,
+                        startRadius: 4,
                         endRadius: 160
                     )
                 )
-                .frame(width: 280, height: 280)
-                .offset(x: 20, y: 180)
-                .blur(radius: 12)
+                .frame(width: 260, height: 260)
+                .offset(x: -70, y: 210)
+                .blur(radius: 14)
 
             RoundedRectangle(cornerRadius: 0)
                 .strokeBorder(
                     LinearGradient(
-                        colors: [Color.white.opacity(0.28), .clear, Color.white.opacity(0.1)],
-                        startPoint: .top,
-                        endPoint: .bottom
+                        colors: [
+                            OmniTheme.accent.opacity(0.22),
+                            Color.white.opacity(0.06),
+                            OmniTheme.accent.opacity(0.1)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
                     ),
                     lineWidth: 1
                 )

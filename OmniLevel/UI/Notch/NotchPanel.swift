@@ -1,6 +1,7 @@
 import AppKit
 
 /// Floating, non-activating panel that sits over the menu-bar / notch region.
+/// Never becomes key — key windows steal focus and freeze the menu-bar popover.
 final class NotchPanel: NSPanel {
     override init(
         contentRect: NSRect,
@@ -21,7 +22,6 @@ final class NotchPanel: NSPanel {
         backgroundColor = .clear
         isMovable = false
         hasShadow = false
-        // Avoid system chrome tinting the black island.
         appearance = NSAppearance(named: .darkAqua)
         collectionBehavior = [
             .fullScreenAuxiliary,
@@ -31,9 +31,10 @@ final class NotchPanel: NSPanel {
         ]
         isReleasedWhenClosed = false
         level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 3)
-        becomesKeyOnlyIfNeeded = true
+        becomesKeyOnlyIfNeeded = false
+        hidesOnDeactivate = false
     }
 
-    override var canBecomeKey: Bool { true }
+    override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 }

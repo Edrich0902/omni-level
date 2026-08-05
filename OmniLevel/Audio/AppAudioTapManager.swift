@@ -233,7 +233,8 @@ public final class AppAudioTapManager: ObservableObject {
     private func scheduleRouteRebuild() {
         rebuildTask?.cancel()
         rebuildTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 350_000_000)
+            // Short debounce so rapid multi-app churn batches, without long silence windows.
+            try? await Task.sleep(nanoseconds: 80_000_000)
             guard !Task.isCancelled else { return }
             rebuildSystemRoute(reason: "user")
         }
@@ -241,13 +242,18 @@ public final class AppAudioTapManager: ObservableObject {
 
     private func rebuildSystemRoute(reason: String) {
         guard !isRebuildingRoute else { return }
-        if reason != "bootstrap", Date().timeIntervalSince(lastRebuildAttempt) < 1.2 {
+        // Differential updates are cheap — only rate-limit full bootstrap thrash.
+        if reason == "bootstrap", Date().timeIntervalSince(lastRebuildAttempt) < 0.4 {
             return
         }
         lastRebuildAttempt = Date()
         isRebuildingRoute = true
-        isConnecting = true
-        engineStatusMessage = "Connecting audio…"
+        // Avoid "Connecting…" flash for hot updates so UI stays calm.
+        let wasLive = isSystemRoutingActive && engine.isRouting
+        if !wasLive {
+            isConnecting = true
+            engineStatusMessage = "Connecting audio…"
+        }
 
         Task { @MainActor in
             await Task.yield()
@@ -310,17 +316,27 @@ public final class AppAudioTapManager: ObservableObject {
 
     private func observeWorkspace() {
         let nc = NSWorkspace.shared.notificationCenter
-        let launch = nc.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [weak self] _ in
+        let launch = nc.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [weak self] note in
             Task { @MainActor in
-                self?.refreshActiveAudioProcesses()
-                // New apps default to "On" — rebuild so they get a tap.
-                self?.scheduleRouteRebuild()
+                guard let self else { return }
+                let before = self.computeRoutedSet()
+                self.refreshActiveAudioProcesses()
+                let after = self.computeRoutedSet()
+                // Only hot-add a tap when the routed set actually changed.
+                if before != after {
+                    self.scheduleRouteRebuild()
+                }
             }
         }
         let terminate = nc.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
-                self?.refreshActiveAudioProcesses()
-                self?.scheduleRouteRebuild()
+                guard let self else { return }
+                let before = self.computeRoutedSet()
+                self.refreshActiveAudioProcesses()
+                let after = self.computeRoutedSet()
+                if before != after {
+                    self.scheduleRouteRebuild()
+                }
             }
         }
         workspaceObservers = [launch, terminate]

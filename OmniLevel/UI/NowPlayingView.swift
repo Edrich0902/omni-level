@@ -167,7 +167,7 @@ struct NowPlayingCard: View {
 
     private var sourceTint: Color {
         switch item.source {
-        case .spotify: return Color(red: 0.18, green: 0.84, blue: 0.45)
+        case .spotify: return Color(red: 0.114, green: 0.725, blue: 0.329)
         case .system: return OmniTheme.accent
         }
     }

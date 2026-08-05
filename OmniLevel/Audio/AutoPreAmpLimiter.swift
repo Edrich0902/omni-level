@@ -1,17 +1,21 @@
 import Foundation
 import os
 
-/// Auto pre-amp + soft brickwall with **slew-limited gain** so EQ-driven pre-amp
-/// changes never zipper while dragging bands.
+/// Soft gain + transparent safety ceiling after EQ.
+///
+/// Pre-amp is a simple linear gain (slew-smoothed so fader moves don't click).
+/// Soft clipping engages only for overshoots that slip past auto headroom —
+/// normal levels pass completely unchanged.
 public final class AutoPreAmpLimiter: @unchecked Sendable {
     private let lock = OSAllocatedUnfairLock()
     private var targetLinear: Float = 1.0
     private var currentLinear: Float = 1.0
     private var preAmpdB: Float = 0
-    /// Per-sample approach toward target (~5 ms ramp at 48 kHz).
-    private var slewPerSample: Float = 0.004
-    private var ceiling: Float = 0.99
-    private var softKnee: Float = 0.05
+    /// Per-sample approach toward target (~8 ms ramp at 48 kHz).
+    private var slewPerSample: Float = 0.0026
+    /// Hard transparency below this absolute level after gain.
+    private let safetyStart: Float = 0.985
+    private let ceiling: Float = 0.999
 
     public init() {}
 
@@ -23,7 +27,6 @@ public final class AutoPreAmpLimiter: @unchecked Sendable {
     }
 
     public func setSampleRate(_ rate: Double) {
-        // Reach target in ~8 ms regardless of rate.
         let steps = max(64, Int(rate * 0.008))
         lock.withLock {
             slewPerSample = 1.0 / Float(steps)
@@ -47,9 +50,11 @@ public final class AutoPreAmpLimiter: @unchecked Sendable {
         let slew = slewPerSample
         lock.unlock()
 
-        // Fully transparent when both sit at unity.
+        // Fully skip when unity — no arithmetic, no nonlinear path.
         if abs(target - 1) < 1e-6, abs(gain - 1) < 1e-5 {
+            lock.lock()
             currentLinear = 1
+            lock.unlock()
             return
         }
 
@@ -59,9 +64,8 @@ public final class AutoPreAmpLimiter: @unchecked Sendable {
                 let step = min(abs(delta), slew) * (delta >= 0 ? 1 : -1)
                 gain += step
             }
-            let g = gain
-            left[i] = softLimit(left[i] * g, ceiling: 0.999, knee: 0.01)
-            right[i] = softLimit(right[i] * g, ceiling: 0.999, knee: 0.01)
+            left[i] = applyGainSafely(left[i], gain: gain)
+            right[i] = applyGainSafely(right[i], gain: gain)
         }
 
         lock.lock()
@@ -70,7 +74,6 @@ public final class AutoPreAmpLimiter: @unchecked Sendable {
     }
 
     public func processInterleaved(_ buffer: UnsafeMutablePointer<Float>, frameCount: Int) {
-        // De-interleave path for tools; rare.
         var l = [Float](repeating: 0, count: frameCount)
         var r = [Float](repeating: 0, count: frameCount)
         for i in 0..<frameCount {
@@ -85,15 +88,18 @@ public final class AutoPreAmpLimiter: @unchecked Sendable {
     }
 
     @inline(__always)
-    private func softLimit(_ x: Float, ceiling: Float, knee: Float) -> Float {
-        let absX = abs(x)
-        if absX < ceiling - knee {
-            return x
+    private func applyGainSafely(_ x: Float, gain: Float) -> Float {
+        let y = x * gain
+        let absY = abs(y)
+        // Transparent under the safety threshold.
+        if absY <= safetyStart {
+            return y
         }
-        let sign: Float = x >= 0 ? 1 : -1
-        let over = absX - (ceiling - knee)
-        let t = tanh(over / max(knee, 0.001))
-        let limited = (ceiling - knee) + t * knee
-        return max(-1.0, min(1.0, sign * min(limited, ceiling)))
+        // Soft asymptotic approach to ceiling — only for rare overs.
+        let sign: Float = y >= 0 ? 1 : -1
+        let over = absY - safetyStart
+        let room = max(ceiling - safetyStart, 0.001)
+        let limited = safetyStart + room * tanh(over / room)
+        return sign * min(limited, ceiling)
     }
 }

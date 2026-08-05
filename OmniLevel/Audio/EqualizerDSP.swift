@@ -12,7 +12,7 @@ public final class EqualizerDSP: @unchecked Sendable {
     private let lock = OSAllocatedUnfairLock()
     private var sampleRate: Double = 48_000
     private var bands: [EqualizerBand]
-    private var autoPreAmpEnabled: Bool = true
+    private var autoPreAmpEnabled: Bool = false
     private var autoPreAmpdB: Float = 0
     private var isWireBypass: Bool = true
 
@@ -232,12 +232,41 @@ public final class EqualizerDSP: @unchecked Sendable {
             autoPreAmpdB = 0
             return
         }
-        let peakBoost = bands.map(\.gaindB).max() ?? 0
-        if peakBoost > 0 {
-            autoPreAmpdB = -peakBoost - 1.0
+        // True cascade peak (Σ peaking dB) — using only max band under-cuts when
+        // neighboring boosts stack, so the post-EQ soft limit crushed the music.
+        let peakBoost = responsePeakBoostdB(samples: 96)
+        if peakBoost > 0.15 {
+            // Extra 2.5 dB of headroom keeps the safety clipper out of regular peaks.
+            autoPreAmpdB = -peakBoost - 2.5
         } else {
             autoPreAmpdB = 0
         }
+    }
+
+    /// Peak magnitude boost of the current curve (must be called with lock held).
+    private func responsePeakBoostdB(samples: Int) -> Float {
+        let sr = Float(sampleRate)
+        let nyquist = sr * 0.5
+        let fMin: Float = 20
+        let fMax = min(nyquist * 0.98, 20_000)
+        var peak: Float = 0
+        let n = max(samples, 16)
+        for i in 0..<n {
+            let t = Float(i) / Float(n - 1)
+            let freq = fMin * pow(fMax / fMin, t)
+            var mag: Float = 0
+            for band in bands {
+                mag += peakingMagnitudedB(
+                    frequency: freq,
+                    center: band.frequency,
+                    gaindB: band.gaindB,
+                    q: band.qFactor,
+                    sampleRate: sr
+                )
+            }
+            if mag > peak { peak = mag }
+        }
+        return peak
     }
 
     /// Rebuild coefficient table into the inactive buffer, then flip — never zeros filters while dragging.

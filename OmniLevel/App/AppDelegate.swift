@@ -12,14 +12,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     let tapManager = AppAudioTapManager()
     let nowPlaying = NowPlayingService()
+    let presetStore = PresetStore()
     lazy var equalizerVM = EqualizerViewModel(
         dsp: tapManager.engine.equalizer,
         limiter: tapManager.engine.limiter,
+        presetStore: presetStore,
         onChange: { [weak self] in
             self?.tapManager.engine.syncPreAmpFromEQ()
         }
     )
-    let presetStore = PresetStore()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -39,6 +40,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             button.target = self
         }
         statusItem = item
+
+        // Restore EQ before UI so the first paint shows the saved curve.
+        equalizerVM.restoreLastSessionIfAvailable()
 
         let popover = NSPopover()
         popover.behavior = .transient
@@ -66,6 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        equalizerVM.flushSessionToDisk()
         removeClickMonitors()
         notchController?.stop()
         nowPlaying.stop()
@@ -103,7 +108,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown]
         ) { [weak self] _ in
-            Task { @MainActor in
+            // Prefer DispatchQueue over Task so close isn't queued behind other MainActor work.
+            DispatchQueue.main.async {
                 self?.closeIfClickOutside()
             }
         }
@@ -111,7 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         localClickMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown]
         ) { [weak self] event in
-            Task { @MainActor in
+            DispatchQueue.main.async {
                 self?.closeIfClickOutside()
             }
             return event

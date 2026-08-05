@@ -19,7 +19,7 @@ struct NotchGeometry: Equatable, Sendable {
         guard let screen else {
             return NotchGeometry(
                 width: 180,
-                height: 32,
+                height: 28,
                 hasPhysicalNotch: false,
                 screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900)
             )
@@ -29,23 +29,20 @@ struct NotchGeometry: Equatable, Sendable {
         var width: CGFloat = 176
         var hasNotch = false
 
+        // Prefer the system menu-bar band height so we never paint thicker than the bar.
+        var height: CGFloat = 28
         if let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea {
+            height = max(left.height, 24)
             let gap = frame.width - left.width - right.width
             if gap > 80 {
                 // Slight under-estimate so black fill fully covers the cutout edge.
                 width = max(gap - 2, 140)
                 hasNotch = true
             }
-        }
-
-        let topInset = screen.safeAreaInsets.top
-        let height: CGFloat
-        if topInset > 0 {
-            // Use the true inset — no crushing / padding hacks.
-            height = topInset
-            hasNotch = hasNotch || topInset >= 24
-        } else {
-            height = 34
+        } else if screen.safeAreaInsets.top > 0 {
+            // Cap hard — raw safeAreaInsets can overshoot the visible menubar chrome.
+            height = min(max(screen.safeAreaInsets.top, 24), 32)
+            hasNotch = screen.safeAreaInsets.top >= 24
         }
 
         return NotchGeometry(
@@ -56,8 +53,9 @@ struct NotchGeometry: Equatable, Sendable {
         )
     }
 
+    /// Visual frame for the collapsed island — flush to the hardware notch, not taller.
     func collapsedFrame(wingExtension: CGFloat) -> CGRect {
-        let w = max(width + wingExtension, width + 80)
+        let w = max(width + wingExtension, width + 64)
         let h = height
         return CGRect(
             x: screenFrame.midX - w / 2,
@@ -65,6 +63,13 @@ struct NotchGeometry: Equatable, Sendable {
             width: w,
             height: h
         )
+    }
+
+    /// Invisible hover pad: slightly wider/taller than the visual, does not change the panel.
+    func collapsedHoverFrame(wingExtension: CGFloat) -> CGRect {
+        collapsedFrame(wingExtension: wingExtension)
+            .insetBy(dx: -16, dy: -8)
+            .offsetBy(dx: 0, dy: -2)
     }
 
     func expandedFrame(size: CGSize) -> CGRect {

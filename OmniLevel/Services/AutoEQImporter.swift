@@ -1,13 +1,11 @@
 import Foundation
 
-/// Imports AutoEQ-style parametric CSV / text into OmniLevel's fixed 16-band layout.
+/// Imports AutoEQ-style parametric CSV / ParametricEQ.txt into OmniLevel's fixed 16-band layout.
 ///
-/// Supported row formats (header optional):
-/// - `Type,Fc,Gain,Q`  (AutoEQ parametric.csv style; Type = PK / LSC / HSC / etc.)
-/// - `Fc,Gain,Q`
-/// - `frequency,gain,q`
-///
-/// Preamp lines like `Preamp: -6.2 dB` are captured when present.
+/// Supported formats:
+/// - AutoEQ `ParametricEQ.txt` (`Preamp:` + `Filter N: ON PK Fc … Gain … Q …`)
+/// - `Type,Fc,Gain,Q`  (AutoEQ parametric.csv)
+/// - `Fc,Gain,Q` / space-separated rows
 public enum AutoEQImporter {
     public static func importFile(at url: URL) throws -> AutoEQProfile {
         let text = try String(contentsOf: url, encoding: .utf8)
@@ -24,17 +22,22 @@ public enum AutoEQImporter {
 
             // Preamp: -6.2 dB
             if line.lowercased().hasPrefix("preamp") {
-                // Prefer signed value near "Preamp: -X"
                 if let match = line.range(of: #"-?\d+(\.\d+)?"#, options: .regularExpression) {
                     preAmp = Float(line[match])
                 }
                 continue
             }
 
-            // Skip obvious headers
+            // Filter 1: ON PK Fc 8800 Hz Gain 5.1 dB Q 1.42
+            if line.lowercased().hasPrefix("filter"),
+               let filter = parseParametricEQLine(line) {
+                filters.append(filter)
+                continue
+            }
+
             let lower = line.lowercased()
             if lower.contains("frequency") && lower.contains("gain") { continue }
-            if lower.hasPrefix("type,") || lower.hasPrefix("filter") { continue }
+            if lower.hasPrefix("type,") { continue }
 
             let parts = line.split(whereSeparator: { $0 == "," || $0 == ";" || $0 == "\t" })
                 .map { String($0).trimmingCharacters(in: .whitespaces) }
@@ -55,7 +58,6 @@ public enum AutoEQImporter {
         var weight = [Float](repeating: 0, count: centers.count)
 
         for filter in profile.filters {
-            // Nearest band index on log scale
             var bestIdx = 0
             var bestDist = Float.greatestFiniteMagnitude
             for (i, c) in centers.enumerated() {
@@ -65,14 +67,12 @@ public enum AutoEQImporter {
                     bestIdx = i
                 }
             }
-            // If very close, assign fully; else soft distribute to neighboring bands
-            let influence = max(0, 1 - bestDist) // 1 when exact octave match 0, 0 after 1 octave
+            let influence = max(0, 1 - bestDist)
             if influence > 0.15 {
                 gains[bestIdx] += filter.gaindB * influence
                 qs[bestIdx] = filter.qFactor
                 weight[bestIdx] += influence
             } else {
-                // Force-assign to nearest to avoid losing info
                 gains[bestIdx] = filter.gaindB
                 qs[bestIdx] = filter.qFactor
                 weight[bestIdx] = 1
@@ -86,26 +86,44 @@ public enum AutoEQImporter {
                 qs[i] = EqualizerBand.defaultQ
             }
         }
-
-        // Optional: blend preamp into overall by not applying here (handled by Auto Pre-Amp UI)
         return (gains, qs)
     }
 
+    /// `Filter 3: ON PK Fc 118 Hz Gain -3.1 dB Q 0.50`
+    private static func parseParametricEQLine(_ line: String) -> AutoEQFilter? {
+        guard let fcRange = line.range(of: #"Fc\s+(-?\d+(?:\.\d+)?)"#, options: [.regularExpression, .caseInsensitive]),
+              let gainRange = line.range(of: #"Gain\s+(-?\d+(?:\.\d+)?)"#, options: [.regularExpression, .caseInsensitive]),
+              let qRange = line.range(of: #"Q\s+(-?\d+(?:\.\d+)?)"#, options: [.regularExpression, .caseInsensitive])
+        else { return nil }
+
+        func number(from match: Range<String.Index>) -> Float? {
+            let segment = String(line[match])
+            guard let numRange = segment.range(of: #"-?\d+(?:\.\d+)?"#, options: .regularExpression) else {
+                return nil
+            }
+            return Float(segment[numRange])
+        }
+
+        guard let fc = number(from: fcRange),
+              let gain = number(from: gainRange),
+              let q = number(from: qRange),
+              fc > 0
+        else { return nil }
+
+        return AutoEQFilter(frequency: fc, gaindB: gain, qFactor: max(0.1, q))
+    }
+
     private static func parseRow(_ parts: [String]) -> AutoEQFilter? {
-        // AutoEQ: Type, Fc, Gain, Q  OR  ON PK Fc 100 Gain -3.2 Q 1.4 (space form converted to parts)
         if parts.count >= 4 {
-            // Try Type, Fc, Gain, Q
             if let fc = Float(parts[1]), let gain = Float(parts[2]), let q = Float(parts[3]), fc > 0 {
                 return AutoEQFilter(frequency: fc, gaindB: gain, qFactor: max(0.1, q))
             }
         }
         if parts.count >= 3 {
-            // Fc, Gain, Q
             if let fc = Float(parts[0]), let gain = Float(parts[1]), let q = Float(parts[2]), fc > 0 {
                 return AutoEQFilter(frequency: fc, gaindB: gain, qFactor: max(0.1, q))
             }
         }
-        // Space-separated "PK 100 -3.2 1.4"
         if parts.count >= 4, Float(parts[0]) == nil {
             if let fc = Float(parts[1]), let gain = Float(parts[2]), let q = Float(parts[3]), fc > 0 {
                 return AutoEQFilter(frequency: fc, gaindB: gain, qFactor: max(0.1, q))

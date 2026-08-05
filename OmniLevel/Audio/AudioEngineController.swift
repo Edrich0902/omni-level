@@ -84,8 +84,9 @@ public final class AudioEngineController: ObservableObject {
         let spectrum: SpectrumAnalyzer
         let spectrumInput: SpectrumAnalyzer
         let mixer: GainPanMixer
-        /// Immutable while graph is running (rebuilt on route change).
-        let streams: [StreamContext]
+        /// Live stream list — swapped under lock so routes can hot-add/remove without stopping output.
+        private let streamsLock = OSAllocatedUnfairLock()
+        private var streamsStorage: [StreamContext]
         var mixLeft: UnsafeMutablePointer<Float>
         var mixRight: UnsafeMutablePointer<Float>
         var tmpLeft: UnsafeMutablePointer<Float>
@@ -111,7 +112,7 @@ public final class AudioEngineController: ObservableObject {
             self.spectrum = spectrum
             self.spectrumInput = spectrumInput
             self.mixer = mixer
-            self.streams = streams
+            self.streamsStorage = streams
             self.maxFrames = maxFrames
             self.mixLeft = .allocate(capacity: maxFrames)
             self.mixRight = .allocate(capacity: maxFrames)
@@ -121,6 +122,14 @@ public final class AudioEngineController: ObservableObject {
             mixRight.initialize(repeating: 0, count: maxFrames)
             tmpLeft.initialize(repeating: 0, count: maxFrames)
             tmpRight.initialize(repeating: 0, count: maxFrames)
+        }
+
+        var streams: [StreamContext] {
+            streamsLock.withLock { streamsStorage }
+        }
+
+        func setStreams(_ next: [StreamContext]) {
+            streamsLock.withLock { streamsStorage = next }
         }
 
         deinit {
@@ -142,8 +151,22 @@ public final class AudioEngineController: ObservableObject {
     // MARK: - Public
 
     /// Start routing for the given app PIDs (each gets its own process tap + volume/balance).
+    /// Uses a seamless differential update when already routing so open/close of apps
+    /// does not tear down living streams.
     public func startSystemRouting(routedPIDs: [pid_t] = []) {
         guard !isStarting else { return }
+
+        // Hot path: differential add/remove — keep output unit + surviving taps alive.
+        if isRouting, mixContext != nil, outputUnit != nil {
+            do {
+                try updateSystemRouting(routedPIDs: routedPIDs)
+                return
+            } catch {
+                log.error("differential update failed, full restart: \(error.localizedDescription, privacy: .public)")
+                // Fall through to full rebuild.
+            }
+        }
+
         isStarting = true
         suppressDeviceRestart = true
         defer {
@@ -177,6 +200,90 @@ public final class AudioEngineController: ObservableObject {
             isRouting = false
             log.error("start failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    /// Add/remove process taps and capture streams without stopping the shared output unit.
+    @available(macOS 14.2, *)
+    private func updateSystemRouting(routedPIDs: [pid_t]) throws {
+        guard let mix = mixContext, outputUnit != nil else {
+            throw NSError(domain: "OmniLevel", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Graph not ready for differential update"
+            ])
+        }
+
+        let desired = Set(routedPIDs)
+        let current = Set(streamContexts.map(\.pid))
+        if desired == current {
+            activeStreamCount = streamContexts.count
+            isRouting = true
+            state = .running
+            return
+        }
+
+        let handles = try processTaps.syncAppTaps(pids: routedPIDs)
+        let handleByPID = Dictionary(uniqueKeysWithValues: handles.map { ($0.pid, $0) })
+
+        let rate = sampleRate > 0 ? sampleRate : ProcessTapIO.deviceSampleRate(preferredOutputDeviceID())
+        let bufferFrames: UInt32 = 512
+        let asbd = Self.stereoFloatNonInterleavedASBD(sampleRate: rate)
+        let ringCap = Int(max(rate, 48_000) * 0.35)
+
+        // Remove streams no longer desired
+        var nextStreams = streamContexts
+        let removed = nextStreams.filter { !desired.contains($0.pid) }
+        for stream in removed {
+            if let unit = stream.unit {
+                AudioOutputUnitStop(unit)
+                AudioUnitUninitialize(unit)
+                AudioComponentInstanceDispose(unit)
+            }
+            stream.unit = nil
+            stream.ring.reset()
+            mixer.removeStream(stream.pid)
+        }
+        nextStreams.removeAll { !desired.contains($0.pid) }
+
+        // Add new streams
+        let existing = Set(nextStreams.map(\.pid))
+        for pid in desired where !existing.contains(pid) {
+            guard let handle = handleByPID[pid] else { continue }
+            Self.trySetSampleRate(handle.aggregateDeviceID, rate: rate)
+            Self.trySetBufferFrames(handle.aggregateDeviceID, frames: bufferFrames)
+
+            let stream = StreamContext(pid: handle.pid, ringCapacity: ringCap)
+            let unit = try makeHALUnit()
+            try setEnableIO(unit, input: true, output: false)
+            try setCurrentDevice(unit, handle.aggregateDeviceID)
+            try setMaxFrames(unit, frames: UInt32(stream.maxFrames))
+            try setStreamFormat(unit, scope: kAudioUnitScope_Output, element: 1, asbd: asbd)
+
+            stream.unit = unit
+            let refCon = Unmanaged.passUnretained(stream).toOpaque()
+            var inputCB = AURenderCallbackStruct(inputProc: streamInputCallback, inputProcRefCon: refCon)
+            try OSStatusCheck(
+                AudioUnitSetProperty(
+                    unit,
+                    kAudioOutputUnitProperty_SetInputCallback,
+                    kAudioUnitScope_Global,
+                    0,
+                    &inputCB,
+                    UInt32(MemoryLayout<AURenderCallbackStruct>.size)
+                ),
+                "SetInputCallback pid=\(handle.pid)"
+            )
+            try OSStatusCheck(AudioUnitInitialize(unit), "Init input pid=\(handle.pid)")
+            try OSStatusCheck(AudioOutputUnitStart(unit), "Start input pid=\(handle.pid)")
+            nextStreams.append(stream)
+        }
+
+        // Publish on both controller + live mix callback — no silence, no output restart.
+        streamContexts = nextStreams
+        mix.setStreams(nextStreams)
+        activeStreamCount = nextStreams.count
+        isRouting = true
+        state = .running
+        lastIOError = nil
+        log.info("hot-updated route → \(nextStreams.count) streams (added \(desired.subtracting(current).count), removed \(current.subtracting(desired).count))")
     }
 
     /// Compatibility: provider may still hand exclude list; prefer routedPIDsProvider.

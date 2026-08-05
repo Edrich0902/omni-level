@@ -13,8 +13,12 @@ struct NotchNowPlayingRootView: View {
     }
 
     /// Match hardware notch corners more closely when closed; slightly larger when open.
-    private var topRadius: CGFloat { viewModel.isExpanded ? 12 : 5 }
-    private var bottomRadius: CGFloat { viewModel.isExpanded ? 26 : 14 }
+    private var topRadius: CGFloat { viewModel.isExpanded ? 10 : 3 }
+    private var bottomRadius: CGFloat {
+        // Collapsed: keep radius within the menubar strip so the blob doesn't hang into windows.
+        if viewModel.isExpanded { return 22 }
+        return min(10, max(6, viewModel.geometry.height * 0.28))
+    }
 
     private var pureBlack: Color { Color(red: 0, green: 0, blue: 0) }
 
@@ -25,30 +29,31 @@ struct NotchNowPlayingRootView: View {
                 .fill(pureBlack)
 
             VStack(spacing: 0) {
-                // Band that covers the physical cutout height.
+                // Band that covers the physical cutout height exactly.
                 Color.clear
                     .frame(height: viewModel.geometry.height)
                     .overlay {
                         if !viewModel.isExpanded {
                             collapsedStrip
-                                .padding(.horizontal, 14)
+                                .padding(.horizontal, 10)
                         }
                     }
 
                 if viewModel.isExpanded {
                     expandedTray
-                        .padding(.horizontal, 16)
-                        .padding(.top, 6)
-                        .padding(.bottom, 16)
+                        .padding(.horizontal, 14)
+                        .padding(.top, 4)
+                        .padding(.bottom, 12)
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .clipShape(NotchShape(topCornerRadius: topRadius, bottomCornerRadius: bottomRadius))
         .background(Color.clear)
         .preferredColorScheme(.dark)
         .compositingGroup()
-        .animation(.spring(response: 0.42, dampingFraction: 0.9), value: viewModel.isExpanded)
+        .animation(.spring(response: 0.38, dampingFraction: 0.92), value: viewModel.isExpanded)
         .animation(.easeOut(duration: 0.2), value: service.players.map(\.id))
     }
 
@@ -56,10 +61,9 @@ struct NotchNowPlayingRootView: View {
 
     private var collapsedStrip: some View {
         HStack(spacing: 0) {
-            // Left wing — primary art + live indicator
-            HStack(spacing: 8) {
+            HStack(spacing: 5) {
                 if let first = service.players.first {
-                    miniArt(first, size: 20)
+                    miniArt(first, size: 15)
                     if first.isPlaying {
                         LiveDot(color: tint(for: first))
                     }
@@ -68,20 +72,18 @@ struct NotchNowPlayingRootView: View {
             }
             .frame(maxWidth: .infinity)
 
-            // Leave the camera housing free.
             Color.clear
-                .frame(width: max(viewModel.geometry.width - 8, 100))
+                .frame(width: max(viewModel.geometry.width - 4, 90))
 
-            // Right wing — second source art, or primary app icon (compact)
-            HStack(spacing: 8) {
+            HStack(spacing: 5) {
                 Spacer(minLength: 0)
                 if service.players.count > 1, let second = service.players.last {
                     if second.isPlaying {
                         LiveDot(color: tint(for: second))
                     }
-                    miniArt(second, size: 20)
+                    miniArt(second, size: 15)
                 } else if let first = service.players.first {
-                    miniAppIcon(first, size: 16)
+                    miniAppIcon(first, size: 13)
                 }
             }
             .frame(maxWidth: .infinity)
@@ -290,7 +292,7 @@ struct NotchNowPlayingRootView: View {
 
     private func tint(for item: NowPlayingItem) -> Color {
         switch item.source {
-        case .spotify: return Color(red: 0.18, green: 0.84, blue: 0.45)
+        case .spotify: return Color(red: 0.114, green: 0.725, blue: 0.329)
         case .system: return OmniTheme.accent
         }
     }

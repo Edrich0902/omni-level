@@ -8,6 +8,8 @@ struct EqualizerView: View {
     var engine: AudioEngineController
 
     @State private var showImporter = false
+    @State private var showAutoEQLibrary = false
+    @StateObject private var autoEQLibrary = AutoEQLibraryService()
     @State private var importError: String?
     @State private var showSaveSheet = false
     @State private var newPresetName = ""
@@ -44,6 +46,17 @@ struct EqualizerView: View {
         ) { result in
             handleImport(result)
         }
+        .sheet(isPresented: $showAutoEQLibrary) {
+            AutoEQLibrarySheet(
+                library: autoEQLibrary,
+                onApply: { profile in
+                    viewModel.applyAutoEQ(profile)
+                },
+                onImportFile: {
+                    showImporter = true
+                }
+            )
+        }
         .alert("Import Failed", isPresented: Binding(
             get: { importError != nil },
             set: { if !$0 { importError = nil } }
@@ -76,13 +89,22 @@ struct EqualizerView: View {
                     .foregroundStyle(OmniTheme.textSecondary)
             }
             Spacer()
-            Text(String(format: "Pre‑Amp  %.1f dB", viewModel.autoPreAmpdB))
+            Text(viewModel.autoPreAmpEnabled
+                 ? String(format: "Pre‑Amp  %.1f dB", viewModel.autoPreAmpdB)
+                 : "Pre‑Amp  Off")
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .foregroundStyle(OmniTheme.accent)
+                .foregroundStyle(viewModel.autoPreAmpEnabled ? OmniTheme.accent : OmniTheme.textSecondary)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
-                .background(OmniTheme.accent.opacity(0.14), in: Capsule())
-                .overlay { Capsule().strokeBorder(OmniTheme.accent.opacity(0.28), lineWidth: 1)
+                .background(
+                    (viewModel.autoPreAmpEnabled ? OmniTheme.accent : OmniTheme.textSecondary).opacity(0.14),
+                    in: Capsule()
+                )
+                .overlay {
+                    Capsule().strokeBorder(
+                        (viewModel.autoPreAmpEnabled ? OmniTheme.accent : OmniTheme.textSecondary).opacity(0.28),
+                        lineWidth: 1
+                    )
                 }
         }
     }
@@ -220,7 +242,6 @@ struct EqualizerView: View {
                     ForEach(presetStore.presets) { preset in
                         Button(preset.name) {
                             viewModel.applyPreset(preset)
-                            presetStore.selectedPresetID = preset.id
                         }
                     }
                     if presetStore.presets.contains(where: { !$0.isBuiltIn }) {
@@ -248,15 +269,15 @@ struct EqualizerView: View {
                 .help("Save current EQ as a custom preset")
 
                 Button {
-                    showImporter = true
+                    showAutoEQLibrary = true
                 } label: {
-                    GlassChip(title: "AutoEQ", systemImage: "waveform.path.ecg")
+                    GlassChip(title: "AutoEQ", systemImage: "headphones")
                 }
                 .buttonStyle(.plain)
+                .help("Browse the AutoEq library or import a ParametricEQ file")
 
                 Button {
                     viewModel.applyPreset(EQPreset.builtIn[0])
-                    presetStore.selectedPresetID = EQPreset.builtIn[0].id
                 } label: {
                     GlassChip(title: "Flat", systemImage: "minus")
                 }
@@ -349,7 +370,9 @@ struct EqualizerView: View {
         let gains = viewModel.bands.map(\.gaindB)
         let qs = viewModel.bands.map(\.qFactor)
         presetStore.saveUserPreset(name: name, gainsdB: gains, qFactors: qs)
-        viewModel.selectedPresetName = name
+        if let preset = presetStore.presets.last(where: { $0.name == name && !$0.isBuiltIn }) {
+            viewModel.applyPreset(preset)
+        }
         newPresetName = ""
     }
 }

@@ -51,50 +51,50 @@ public final class ProcessTapIO: @unchecked Sendable {
         lock.withLock { appTaps }
     }
 
-    /// Create one muted-when-tapped stereo mixdown tap per PID.
+    /// Create one muted-when-tapped stereo mixdown tap per PID (full replace).
     @available(macOS 14.2, *)
     @discardableResult
     public func startAppTaps(pids: [pid_t]) throws -> [AppTapHandle] {
-        destroyAllAppTaps()
+        try syncAppTaps(pids: pids)
+    }
 
+    /// Differential: destroy taps for removed PIDs, create only for new ones.
+    /// Surviving taps stay live so audio through those apps is uninterrupted.
+    @available(macOS 14.2, *)
+    @discardableResult
+    public func syncAppTaps(pids: [pid_t]) throws -> [AppTapHandle] {
         let ownPID = ProcessInfo.processInfo.processIdentifier
-        var created: [AppTapHandle] = []
+        let desired = Set(pids.filter { $0 != ownPID })
 
-        for pid in Set(pids) where pid != ownPID {
-            guard let processObject = Self.audioProcessObjectID(for: pid) else { continue }
+        let existing = lock.withLock { appTaps }
+        let existingByPID = Dictionary(uniqueKeysWithValues: existing.map { ($0.pid, $0) })
+        let currentPIDs = Set(existingByPID.keys)
 
-            let description = CATapDescription(stereoMixdownOfProcesses: [processObject])
-            description.name = "OmniLevel App \(pid)"
-            description.isPrivate = true
-            description.muteBehavior = .mutedWhenTapped
+        let toRemove = currentPIDs.subtracting(desired)
+        let toAdd = desired.subtracting(currentPIDs)
 
-            var tapID = AudioObjectID(kAudioObjectUnknown)
-            let status = AudioHardwareCreateProcessTap(description, &tapID)
-            guard status == noErr, tapID != kAudioObjectUnknown else { continue }
-
-            guard let uid = Self.tapUID(for: tapID) else {
-                AudioHardwareDestroyProcessTap(tapID)
-                continue
-            }
-
-            do {
-                let aggregateID = try Self.createTapOnlyAggregate(tapUID: uid, label: "App\(pid)")
-                created.append(AppTapHandle(
-                    pid: pid,
-                    tapID: tapID,
-                    aggregateDeviceID: aggregateID,
-                    tapUID: uid
-                ))
-            } catch {
-                AudioHardwareDestroyProcessTap(tapID)
+        // Destroy removed taps first (releases mute-when-tapped for those apps only).
+        for pid in toRemove {
+            if let handle = existingByPID[pid] {
+                destroy(handle: handle)
             }
         }
 
-        guard !created.isEmpty || pids.isEmpty else {
+        var kept = existing.filter { desired.contains($0.pid) }
+        for pid in toAdd {
+            if let handle = try createAppTap(pid: pid) {
+                kept.append(handle)
+            }
+        }
+
+        // Stable order by PID for deterministic mix.
+        kept.sort { $0.pid < $1.pid }
+
+        if kept.isEmpty, !desired.isEmpty {
             throw TapError.noProcessTapsCreated
         }
 
-        let snapshot = created
+        let snapshot = kept
         lock.withLock { appTaps = snapshot }
         return snapshot
     }
@@ -106,12 +106,48 @@ public final class ProcessTapIO: @unchecked Sendable {
             return h
         }
         for handle in handles {
-            if handle.aggregateDeviceID != kAudioObjectUnknown {
-                AudioHardwareDestroyAggregateDevice(handle.aggregateDeviceID)
-            }
-            if #available(macOS 14.2, *), handle.tapID != kAudioObjectUnknown {
-                AudioHardwareDestroyProcessTap(handle.tapID)
-            }
+            destroy(handle: handle)
+        }
+    }
+
+    private func destroy(handle: AppTapHandle) {
+        if handle.aggregateDeviceID != kAudioObjectUnknown {
+            AudioHardwareDestroyAggregateDevice(handle.aggregateDeviceID)
+        }
+        if #available(macOS 14.2, *), handle.tapID != kAudioObjectUnknown {
+            AudioHardwareDestroyProcessTap(handle.tapID)
+        }
+    }
+
+    @available(macOS 14.2, *)
+    private func createAppTap(pid: pid_t) throws -> AppTapHandle? {
+        guard let processObject = Self.audioProcessObjectID(for: pid) else { return nil }
+
+        let description = CATapDescription(stereoMixdownOfProcesses: [processObject])
+        description.name = "OmniLevel App \(pid)"
+        description.isPrivate = true
+        description.muteBehavior = .mutedWhenTapped
+
+        var tapID = AudioObjectID(kAudioObjectUnknown)
+        let status = AudioHardwareCreateProcessTap(description, &tapID)
+        guard status == noErr, tapID != kAudioObjectUnknown else { return nil }
+
+        guard let uid = Self.tapUID(for: tapID) else {
+            AudioHardwareDestroyProcessTap(tapID)
+            return nil
+        }
+
+        do {
+            let aggregateID = try Self.createTapOnlyAggregate(tapUID: uid, label: "App\(pid)")
+            return AppTapHandle(
+                pid: pid,
+                tapID: tapID,
+                aggregateDeviceID: aggregateID,
+                tapUID: uid
+            )
+        } catch {
+            AudioHardwareDestroyProcessTap(tapID)
+            return nil
         }
     }
 
