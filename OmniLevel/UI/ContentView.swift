@@ -1,0 +1,406 @@
+import SwiftUI
+
+enum MainPane: String, CaseIterable, Identifiable {
+    case equalizer = "Equalizer"
+    case apps = "Apps"
+    case monitor = "Monitor"
+
+    var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .equalizer: return "slider.vertical.3"
+        case .apps: return "square.stack.3d.up.fill"
+        case .monitor: return "waveform"
+        }
+    }
+}
+
+struct ContentView: View {
+    @ObservedObject var tapManager: AppAudioTapManager
+    @ObservedObject var equalizerVM: EqualizerViewModel
+    @ObservedObject var presetStore: PresetStore
+    @ObservedObject var nowPlaying: NowPlayingService
+    @StateObject private var launchAtLogin = LaunchAtLoginService()
+    @State private var pane: MainPane = .equalizer
+    @State private var appSearch = ""
+
+    private var engine: AudioEngineController { tapManager.engine }
+
+    private var filteredApps: [AppAudioNode] {
+        let q = appSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return tapManager.runningAppAudioNodes }
+        return tapManager.runningAppAudioNodes.filter {
+            $0.appName.localizedCaseInsensitiveContains(q)
+            || ($0.bundleIdentifier?.localizedCaseInsensitiveContains(q) ?? false)
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            GlassBackground()
+
+            VStack(spacing: 0) {
+                header
+                    .padding(.horizontal, 16)
+                    .padding(.top, 14)
+                    .padding(.bottom, 10)
+
+                deviceStrip
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 10)
+
+                NowPlayingSection(service: nowPlaying)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 10)
+
+                if let error = tapManager.lastError {
+                    errorBanner(error)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 8)
+                }
+
+                paneSwitcher
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 10)
+
+                Group {
+                    switch pane {
+                    case .equalizer:
+                        ScrollView {
+                            EqualizerView(viewModel: equalizerVM, presetStore: presetStore, engine: engine)
+                                .padding(.horizontal, 16)
+                                .padding(.bottom, 16)
+                        }
+                    case .apps:
+                        appsPane
+                    case .monitor:
+                        VisualizerView(engine: engine)
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 16)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .animation(.spring(response: 0.35, dampingFraction: 0.86), value: pane)
+            }
+        }
+        .frame(width: 480, height: 760)
+        .preferredColorScheme(.dark)
+        .onAppear {
+            engine.refreshDevices()
+            tapManager.refreshActiveAudioProcesses()
+            // Now Playing is owned by AppDelegate (shared with the notch overlay).
+        }
+    }
+
+    // MARK: - Header
+
+    private var header: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text("OmniLevel")
+                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [.white, OmniTheme.accent.opacity(0.9)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                    statusPill
+                }
+                Text(statusSubtitle)
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(OmniTheme.textSecondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            Menu {
+                Toggle("Launch at Login", isOn: Binding(
+                    get: { launchAtLogin.isEnabled },
+                    set: { launchAtLogin.setEnabled($0) }
+                ))
+
+                if let err = launchAtLogin.lastError {
+                    Text(err)
+                        .foregroundStyle(.secondary)
+                }
+
+                Divider()
+
+                Button("Quit OmniLevel", role: .destructive) {
+                    tapManager.shutdown()
+                    NSApplication.shared.terminate(nil)
+                }
+                .keyboardShortcut("q", modifiers: .command)
+            } label: {
+                Image(systemName: "ellipsis.circle.fill")
+                    .font(.system(size: 22, weight: .medium))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(OmniTheme.textPrimary)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .help("Settings")
+        }
+    }
+
+    private var statusPill: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 6, height: 6)
+                .shadow(color: statusColor.opacity(0.8), radius: 4)
+            Text(statusLabel)
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .foregroundStyle(statusColor)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(statusColor.opacity(0.14), in: Capsule())
+        .overlay { Capsule().strokeBorder(statusColor.opacity(0.28), lineWidth: 1) }
+    }
+
+    private var statusLabel: String {
+        switch engine.state {
+        case .running: return "Active"
+        case .stopped: return "Starting…"
+        case .error: return "Error"
+        }
+    }
+
+    private var statusColor: Color {
+        switch engine.state {
+        case .running: return OmniTheme.mint
+        case .stopped: return OmniTheme.amber
+        case .error: return OmniTheme.coral
+        }
+    }
+
+    private var statusSubtitle: String {
+        if case .error(let m) = engine.state { return m }
+        if !tapManager.engineStatusMessage.isEmpty {
+            return tapManager.engineStatusMessage
+        }
+        return "→ \(engine.outputDeviceName)"
+    }
+
+    // MARK: - Devices
+
+    private var deviceStrip: some View {
+        HStack(spacing: 10) {
+            devicePicker(
+                label: "Input",
+                icon: "mic.fill",
+                selection: Binding(
+                    get: { engine.selectedInputDeviceID },
+                    set: { engine.selectInputDevice($0) }
+                ),
+                devices: engine.devices.inputDevices
+            )
+
+            devicePicker(
+                label: "Output",
+                icon: "hifispeaker.fill",
+                selection: Binding(
+                    get: { engine.selectedOutputDeviceID },
+                    set: { engine.selectOutputDevice($0) }
+                ),
+                devices: engine.devices.outputDevices
+            )
+        }
+        .padding(12)
+        .glassCard(cornerRadius: 16, elevated: false)
+    }
+
+    private func devicePicker(
+        label: String,
+        icon: String,
+        selection: Binding<UInt32>,
+        devices: [AudioDeviceInfo]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(OmniTheme.accent)
+                Text(label)
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(OmniTheme.textSecondary)
+                    .textCase(.uppercase)
+                    .tracking(0.6)
+            }
+            Picker(label, selection: selection) {
+                ForEach(devices) { device in
+                    Text(device.name).tag(device.id)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .tint(OmniTheme.textPrimary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Tabs
+
+    private var paneSwitcher: some View {
+        HStack(spacing: 4) {
+            ForEach(MainPane.allCases) { p in
+                Button {
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                        pane = p
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: p.icon)
+                            .font(.system(size: 11, weight: .semibold))
+                        Text(p.rawValue)
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    }
+                    .foregroundStyle(pane == p ? Color.black.opacity(0.88) : OmniTheme.textPrimary.opacity(0.75))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 36)
+                    .background {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(
+                                pane == p
+                                    ? AnyShapeStyle(
+                                        LinearGradient(
+                                            colors: [OmniTheme.accent, OmniTheme.mint.opacity(0.85)],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                                    : AnyShapeStyle(Color.clear)
+                            )
+                            .shadow(color: pane == p ? OmniTheme.accent.opacity(0.35) : .clear, radius: 10, y: 3)
+                    }
+                    .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(4)
+        .background {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(OmniTheme.fill)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(OmniTheme.stroke, lineWidth: 1)
+                }
+        }
+    }
+
+    // MARK: - Apps pane
+
+    private var appsPane: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                SectionLabel(
+                    title: "Applications",
+                    trailing: "\(filteredApps.count)"
+                )
+            }
+            .padding(.horizontal, 16)
+
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(OmniTheme.textSecondary)
+                TextField("Search apps", text: $appSearch)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(OmniTheme.textPrimary)
+                if !appSearch.isEmpty {
+                    Button {
+                        appSearch = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(OmniTheme.textSecondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .glassCard(cornerRadius: 12, elevated: false)
+            .padding(.horizontal, 16)
+
+            if tapManager.runningAppAudioNodes.isEmpty {
+                emptyState(message: "No apps detected yet")
+            } else if filteredApps.isEmpty {
+                emptyState(message: "No apps match “\(appSearch)”")
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(filteredApps) { node in
+                            AppVolumeCard(
+                                node: node,
+                                onVolume: { tapManager.setVolume(pid: node.id, volume: $0) },
+                                onPan: { tapManager.setPan(pid: node.id, pan: $0) },
+                                onMute: { tapManager.toggleMute(pid: node.id) },
+                                onSolo: { tapManager.toggleSolo(pid: node.id) },
+                                onToggleTap: { tapManager.toggleTap(for: node.id) }
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 16)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private func emptyState(message: String) -> some View {
+        VStack(spacing: 10) {
+            Image(systemName: "app.dashed")
+                .font(.system(size: 28, weight: .light))
+                .foregroundStyle(OmniTheme.textSecondary)
+            Text(message)
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(OmniTheme.textSecondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .glassCard(cornerRadius: 16, elevated: false)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 16)
+    }
+
+    private func errorBanner(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(OmniTheme.coral)
+            Text(message)
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(OmniTheme.textPrimary)
+                .lineLimit(2)
+            Spacer()
+            Button {
+                tapManager.clearError()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(OmniTheme.textSecondary)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(10)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(OmniTheme.coral.opacity(0.14))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(OmniTheme.coral.opacity(0.35), lineWidth: 1)
+                }
+        }
+    }
+}

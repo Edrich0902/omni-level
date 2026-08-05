@@ -1,0 +1,90 @@
+import AppKit
+import Foundation
+
+/// Spotify Desktop via AppleScript — dedicated path so it stays controllable even
+/// when another app owns system Media Remote (e.g. a browser tab).
+enum SpotifyController {
+    static let bundleID = "com.spotify.client"
+
+    struct State {
+        var title: String
+        var artist: String
+        var album: String
+        var artworkURL: String?
+        var isPlaying: Bool
+        /// Seconds into the current track.
+        var position: TimeInterval
+        /// Track length in seconds.
+        var duration: TimeInterval
+    }
+
+    static var isRunning: Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
+    }
+
+    static func appIcon() -> NSImage? {
+        NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.icon
+    }
+
+    /// Returns track metadata if Spotify is running. Nil script result = not running / not ok.
+    static func fetchState() -> State? {
+        guard isRunning else { return nil }
+
+        let script = """
+        tell application "Spotify"
+            if not running then return "|||||"
+            set t to name of current track
+            set a to artist of current track
+            set al to album of current track
+            set art to artwork url of current track
+            set p to player state as string
+            set pos to player position
+            set dur to duration of current track
+            return t & "|||" & a & "|||" & al & "|||" & art & "|||" & p & "|||" & pos & "|||" & dur
+        end tell
+        """
+        guard let raw = runAppleScript(script) else { return nil }
+        let parts = raw.components(separatedBy: "|||")
+        guard parts.count >= 7 else { return nil }
+        let title = parts[0]
+        let artist = parts[1]
+        let album = parts[2]
+        let art = parts[3]
+        let state = parts[4].lowercased()
+        if title.isEmpty && artist.isEmpty { return nil }
+
+        // Spotify reports duration in milliseconds, position in seconds.
+        let position = TimeInterval(parts[5].replacingOccurrences(of: ",", with: ".")) ?? 0
+        let durationRaw = TimeInterval(parts[6].replacingOccurrences(of: ",", with: ".")) ?? 0
+        let duration = durationRaw > 10_000 ? durationRaw / 1000.0 : durationRaw
+
+        return State(
+            title: title,
+            artist: artist,
+            album: album,
+            artworkURL: art.isEmpty ? nil : art,
+            isPlaying: state.contains("playing"),
+            position: max(0, position),
+            duration: max(0, duration)
+        )
+    }
+
+    static func togglePlayPause() { runAppleScript("tell application \"Spotify\" to playpause") }
+    static func nextTrack() { runAppleScript("tell application \"Spotify\" to next track") }
+    static func previousTrack() { runAppleScript("tell application \"Spotify\" to previous track") }
+
+    /// Seeks to an absolute position in seconds.
+    static func setPosition(_ seconds: TimeInterval) {
+        let clamped = max(0, seconds)
+        runAppleScript("tell application \"Spotify\" to set player position to \(clamped)")
+    }
+
+    @discardableResult
+    private static func runAppleScript(_ source: String) -> String? {
+        var error: NSDictionary?
+        guard let script = NSAppleScript(source: source) else { return nil }
+        let result = script.executeAndReturnError(&error)
+        if error != nil { return nil }
+        return result.stringValue
+    }
+}

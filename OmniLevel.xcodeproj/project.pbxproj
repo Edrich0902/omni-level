@@ -1,0 +1,513 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		2B212F80E079434282538BF8 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = E683BFBE58C340248BCE31C5 /* AppDelegate.swift */; };
+		41C419F45189435EB37816DD /* OmniLevelApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A06B79D2C84D4C4AB1F20A94 /* OmniLevelApp.swift */; };
+		1B116BDD629742D9AE05D590 /* AppAudioTapManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFDCB062810443A39C6FD4A0 /* AppAudioTapManager.swift */; };
+		0B4C0F400D414E369451218C /* AudioEngineController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD3CAD5B56E24876BD922658 /* AudioEngineController.swift */; };
+		0BCAA4F46E2441D08CEC59DD /* AudioLevels.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1B57AB7D20341319E01EB50 /* AudioLevels.swift */; };
+		1739BAFFF672441ABBC28ABA /* AutoPreAmpLimiter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1510119DA8424FFFAA790FCF /* AutoPreAmpLimiter.swift */; };
+		CD3B5DDB57F542BAA9D9A88C /* EqualizerDSP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47D6A8E10B564E13A3887995 /* EqualizerDSP.swift */; };
+		AC194965007B4C4E9C3D0EBC /* GainPanMixer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AACF7BC9A534C448FA64152 /* GainPanMixer.swift */; };
+		FB1371BDBB7245799F4DDC4B /* ProcessTapIO.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CE47F08A31347D9A0B2F8BD /* ProcessTapIO.swift */; };
+		15075F671B884615BAE3171C /* SpectrumAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A81BCEC2DFC849E29688EF8E /* SpectrumAnalyzer.swift */; };
+		A1B2C3D4E5F60718293A4B5C /* StereoRingBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F60718293A4B5C6D /* StereoRingBuffer.swift */; };
+		3ABE6B4197AC4FCD97923772 /* AppAudioNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = E005B4279DD947849E668F1D /* AppAudioNode.swift */; };
+		3A7B5162A2E9429498813C69 /* AutoEQProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21873007A0F047A3A7A1D226 /* AutoEQProfile.swift */; };
+		219BEED4D583456B89B1EB9E /* EQPreset.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C5C1E0FD23441459CED7F48 /* EQPreset.swift */; };
+		ACD8C298FF1842F9AF3C949A /* EqualizerBand.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E1CCCBA5BC64F5DB59D7986 /* EqualizerBand.swift */; };
+		7F627553EA4C4F60A117005F /* AutoEQImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74849DEDB50A4EA5ACB2EF60 /* AutoEQImporter.swift */; };
+		393667BAE03B436988F9FD94 /* PresetStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4704AA9F75B84C9A9B00398E /* PresetStore.swift */; };
+		92C64D7D91FD4243A580FEFE /* ProcessIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 217A55CD95C4404BA3C78AE1 /* ProcessIdentity.swift */; };
+		04C3CDF2CE934C4F92AA7147 /* AppVolumeCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8E3DFF9D0904E00ACA0AAD6 /* AppVolumeCard.swift */; };
+		22D86FC72E684306A209C06D /* GlassChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE013232538942E1A6021F27 /* GlassChrome.swift */; };
+		42EB3D01B470467AB26EDB18 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0386425AEB4EAEA4B19442 /* ContentView.swift */; };
+		79D020956EC14DC28E0BB161 /* EqualizerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A3827083A1E47FA861AF8F5 /* EqualizerView.swift */; };
+		BC80AA18DD3C4F5E8D60A869 /* EqualizerViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E15F14FC5C87417F82F84DFF /* EqualizerViewModel.swift */; };
+		1C7F3DD6B0C2403D975F491F /* VisualizerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA12410F83E042BF9911384B /* VisualizerView.swift */; };
+		D4A2DF2A09F541FCB19F50FA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E78770AEB49A400F9DC7C7C6 /* Assets.xcassets */; };
+		5F8F2AE1D14D45B9ABDA1C88 /* flat.json in Resources */ = {isa = PBXBuildFile; fileRef = 24B96979A256444A84C84D4D /* flat.json */; };
+		5596CBEB75A54208B02DF255 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7B495A3F34ED4C1FAE6C3BED /* AudioToolbox.framework */; };
+		D57A27FEA00B4DF888A68DB4 /* CoreAudio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 370206CAA7C24DB4A65016DB /* CoreAudio.framework */; };
+		17253B3EC3BA4837953540FD /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 09441B9A24754AA48F0DB201 /* Accelerate.framework */; };
+		C89C3227009E4E58933C4B1A /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DA4281842EA745C0B25F1D4A /* AVFoundation.framework */; };
+		EA724534489D46B886C41343 /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A2C088A8307B43CCA3B53F1E /* AppKit.framework */; };
+		7AF4B19424C645BA852EC1C8 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5D8988FAC8CB4EEE8B3FA1F7 /* SwiftUI.framework */; };
+		29FA664CA6D445D7BB9E51EA /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EC61F4E711E74B78A6A48FF2 /* Cocoa.framework */; };
+		15DEB2CEFCF948B4BA18D9FC /* DSPValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39C7B3B07ABC4AD9A8FB33A8 /* DSPValidation.swift */; };
+		6C4302EAAFF4413FA59907AF /* ServiceManagement.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 95AA6BABC97140408F40A716 /* ServiceManagement.framework */; };
+		561C425AEE994BE2A596F0E4 /* AudioDeviceInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D32B99203DD4FE5A772E8E7 /* AudioDeviceInfo.swift */; };
+		F378647E6E864EDBA2A1C6E7 /* AudioDeviceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF433422AFFD4661B8B2C04B /* AudioDeviceManager.swift */; };
+		5CB5650623FA4C52B8416F44 /* LaunchAtLoginService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88C4822BFD854251BD780412 /* LaunchAtLoginService.swift */; };
+		C1NOWPLAY001BF00000000001 /* NowPlayingItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1NOWPLAY001FR00000000001 /* NowPlayingItem.swift */; };
+		C1NOWPLAY002BF00000000002 /* MediaRemoteBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1NOWPLAY002FR00000000002 /* MediaRemoteBridge.swift */; };
+		C1NOWPLAY003BF00000000003 /* SpotifyController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1NOWPLAY003FR00000000003 /* SpotifyController.swift */; };
+		C1NOWPLAY004BF00000000004 /* NowPlayingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1NOWPLAY004FR00000000004 /* NowPlayingService.swift */; };
+		C1NOWPLAY005BF00000000005 /* NowPlayingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1NOWPLAY005FR00000000005 /* NowPlayingView.swift */; };
+		C1NOTCH001BF00000000001 /* NotchPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1NOTCH001FR00000000001 /* NotchPanel.swift */; };
+		C1NOTCH002BF00000000002 /* NotchGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1NOTCH002FR00000000002 /* NotchGeometry.swift */; };
+		C1NOTCH003BF00000000003 /* NotchShape.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1NOTCH003FR00000000003 /* NotchShape.swift */; };
+		C1NOTCH004BF00000000004 /* NotchNowPlayingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1NOTCH004FR00000000004 /* NotchNowPlayingController.swift */; };
+		C1NOTCH005BF00000000005 /* NotchNowPlayingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1NOTCH005FR00000000005 /* NotchNowPlayingView.swift */; };
+		C1SEEK001BF00000000001 /* NowPlayingSeekBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1SEEK001FR00000000001 /* NowPlayingSeekBar.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		E4E8DE58B65E41818FCC9DE6 /* OmniLevel.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OmniLevel.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E683BFBE58C340248BCE31C5 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		A06B79D2C84D4C4AB1F20A94 /* OmniLevelApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OmniLevelApp.swift; sourceTree = "<group>"; };
+		CFDCB062810443A39C6FD4A0 /* AppAudioTapManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppAudioTapManager.swift; sourceTree = "<group>"; };
+		BD3CAD5B56E24876BD922658 /* AudioEngineController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioEngineController.swift; sourceTree = "<group>"; };
+		D1B57AB7D20341319E01EB50 /* AudioLevels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioLevels.swift; sourceTree = "<group>"; };
+		1510119DA8424FFFAA790FCF /* AutoPreAmpLimiter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoPreAmpLimiter.swift; sourceTree = "<group>"; };
+		47D6A8E10B564E13A3887995 /* EqualizerDSP.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EqualizerDSP.swift; sourceTree = "<group>"; };
+		8AACF7BC9A534C448FA64152 /* GainPanMixer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GainPanMixer.swift; sourceTree = "<group>"; };
+		4CE47F08A31347D9A0B2F8BD /* ProcessTapIO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessTapIO.swift; sourceTree = "<group>"; };
+		A81BCEC2DFC849E29688EF8E /* SpectrumAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpectrumAnalyzer.swift; sourceTree = "<group>"; };
+		B2C3D4E5F60718293A4B5C6D /* StereoRingBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StereoRingBuffer.swift; sourceTree = "<group>"; };
+		E005B4279DD947849E668F1D /* AppAudioNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppAudioNode.swift; sourceTree = "<group>"; };
+		21873007A0F047A3A7A1D226 /* AutoEQProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoEQProfile.swift; sourceTree = "<group>"; };
+		2C5C1E0FD23441459CED7F48 /* EQPreset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EQPreset.swift; sourceTree = "<group>"; };
+		7E1CCCBA5BC64F5DB59D7986 /* EqualizerBand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EqualizerBand.swift; sourceTree = "<group>"; };
+		74849DEDB50A4EA5ACB2EF60 /* AutoEQImporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoEQImporter.swift; sourceTree = "<group>"; };
+		4704AA9F75B84C9A9B00398E /* PresetStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetStore.swift; sourceTree = "<group>"; };
+		217A55CD95C4404BA3C78AE1 /* ProcessIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessIdentity.swift; sourceTree = "<group>"; };
+		C8E3DFF9D0904E00ACA0AAD6 /* AppVolumeCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppVolumeCard.swift; sourceTree = "<group>"; };
+		AE013232538942E1A6021F27 /* GlassChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassChrome.swift; sourceTree = "<group>"; };
+		AB0386425AEB4EAEA4B19442 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		3A3827083A1E47FA861AF8F5 /* EqualizerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EqualizerView.swift; sourceTree = "<group>"; };
+		E15F14FC5C87417F82F84DFF /* EqualizerViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EqualizerViewModel.swift; sourceTree = "<group>"; };
+		FA12410F83E042BF9911384B /* VisualizerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualizerView.swift; sourceTree = "<group>"; };
+		E78770AEB49A400F9DC7C7C6 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		24B96979A256444A84C84D4D /* flat.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = flat.json; sourceTree = "<group>"; };
+		FAC5EF39C8D74FC38BB4ED4A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		FFED0F1805A446CA91D1934C /* OmniLevel.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = OmniLevel.entitlements; sourceTree = "<group>"; };
+		7B495A3F34ED4C1FAE6C3BED /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
+		370206CAA7C24DB4A65016DB /* CoreAudio.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreAudio.framework; path = System/Library/Frameworks/CoreAudio.framework; sourceTree = SDKROOT; };
+		09441B9A24754AA48F0DB201 /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
+		DA4281842EA745C0B25F1D4A /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
+		A2C088A8307B43CCA3B53F1E /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = System/Library/Frameworks/AppKit.framework; sourceTree = SDKROOT; };
+		5D8988FAC8CB4EEE8B3FA1F7 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+		EC61F4E711E74B78A6A48FF2 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = System/Library/Frameworks/Cocoa.framework; sourceTree = SDKROOT; };
+		39C7B3B07ABC4AD9A8FB33A8 /* DSPValidation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DSPValidation.swift; sourceTree = "<group>"; };
+		95AA6BABC97140408F40A716 /* ServiceManagement.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ServiceManagement.framework; path = System/Library/Frameworks/ServiceManagement.framework; sourceTree = SDKROOT; };
+		9D32B99203DD4FE5A772E8E7 /* AudioDeviceInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioDeviceInfo.swift; sourceTree = "<group>"; };
+		BF433422AFFD4661B8B2C04B /* AudioDeviceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioDeviceManager.swift; sourceTree = "<group>"; };
+		88C4822BFD854251BD780412 /* LaunchAtLoginService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchAtLoginService.swift; sourceTree = "<group>"; };
+		C1NOWPLAY001FR00000000001 /* NowPlayingItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingItem.swift; sourceTree = "<group>"; };
+		C1NOWPLAY002FR00000000002 /* MediaRemoteBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaRemoteBridge.swift; sourceTree = "<group>"; };
+		C1NOWPLAY003FR00000000003 /* SpotifyController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpotifyController.swift; sourceTree = "<group>"; };
+		C1NOWPLAY004FR00000000004 /* NowPlayingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingService.swift; sourceTree = "<group>"; };
+		C1NOWPLAY005FR00000000005 /* NowPlayingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingView.swift; sourceTree = "<group>"; };
+		C1NOTCH001FR00000000001 /* NotchPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchPanel.swift; sourceTree = "<group>"; };
+		C1NOTCH002FR00000000002 /* NotchGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchGeometry.swift; sourceTree = "<group>"; };
+		C1NOTCH003FR00000000003 /* NotchShape.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchShape.swift; sourceTree = "<group>"; };
+		C1NOTCH004FR00000000004 /* NotchNowPlayingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchNowPlayingController.swift; sourceTree = "<group>"; };
+		C1NOTCH005FR00000000005 /* NotchNowPlayingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchNowPlayingView.swift; sourceTree = "<group>"; };
+		C1SEEK001FR00000000001 /* NowPlayingSeekBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingSeekBar.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		47703ECDE69842578A160509 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5596CBEB75A54208B02DF255 /* AudioToolbox.framework in Frameworks */,
+				D57A27FEA00B4DF888A68DB4 /* CoreAudio.framework in Frameworks */,
+				17253B3EC3BA4837953540FD /* Accelerate.framework in Frameworks */,
+				C89C3227009E4E58933C4B1A /* AVFoundation.framework in Frameworks */,
+				EA724534489D46B886C41343 /* AppKit.framework in Frameworks */,
+				7AF4B19424C645BA852EC1C8 /* SwiftUI.framework in Frameworks */,
+				29FA664CA6D445D7BB9E51EA /* Cocoa.framework in Frameworks */,
+				6C4302EAAFF4413FA59907AF /* ServiceManagement.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		C7E53ADE7D6B47CDA5FACDA4 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				E4E8DE58B65E41818FCC9DE6 /* OmniLevel.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		F79921C67D9E437CA24470C7 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				7B495A3F34ED4C1FAE6C3BED /* AudioToolbox.framework */,
+				370206CAA7C24DB4A65016DB /* CoreAudio.framework */,
+				09441B9A24754AA48F0DB201 /* Accelerate.framework */,
+				DA4281842EA745C0B25F1D4A /* AVFoundation.framework */,
+				A2C088A8307B43CCA3B53F1E /* AppKit.framework */,
+				5D8988FAC8CB4EEE8B3FA1F7 /* SwiftUI.framework */,
+				EC61F4E711E74B78A6A48FF2 /* Cocoa.framework */,
+				95AA6BABC97140408F40A716 /* ServiceManagement.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		566C122461E44843BE2DF07C /* OmniLevel */ = {
+			isa = PBXGroup;
+			children = (
+				702C42DABAFC44139813CD64 /* App */,
+				F06DBB8B01944D52A56FA6F3 /* Audio */,
+				75856ADD288041DFB11E6392 /* Models */,
+				470E93D136494F409AC6B360 /* Services */,
+				8480D365D52F4E1BAFFA88CB /* UI */,
+				E78770AEB49A400F9DC7C7C6 /* Assets.xcassets */,
+				4C6FD4CCA98D436B9651DE30 /* Resources */,
+			);
+			path = OmniLevel;
+			sourceTree = "<group>";
+		};
+		702C42DABAFC44139813CD64 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				E683BFBE58C340248BCE31C5 /* AppDelegate.swift */,
+				A06B79D2C84D4C4AB1F20A94 /* OmniLevelApp.swift */,
+				FAC5EF39C8D74FC38BB4ED4A /* Info.plist */,
+				FFED0F1805A446CA91D1934C /* OmniLevel.entitlements */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		F06DBB8B01944D52A56FA6F3 /* Audio */ = {
+			isa = PBXGroup;
+			children = (
+				CFDCB062810443A39C6FD4A0 /* AppAudioTapManager.swift */,
+				BD3CAD5B56E24876BD922658 /* AudioEngineController.swift */,
+				D1B57AB7D20341319E01EB50 /* AudioLevels.swift */,
+				1510119DA8424FFFAA790FCF /* AutoPreAmpLimiter.swift */,
+				47D6A8E10B564E13A3887995 /* EqualizerDSP.swift */,
+				8AACF7BC9A534C448FA64152 /* GainPanMixer.swift */,
+				4CE47F08A31347D9A0B2F8BD /* ProcessTapIO.swift */,
+				A81BCEC2DFC849E29688EF8E /* SpectrumAnalyzer.swift */,
+				B2C3D4E5F60718293A4B5C6D /* StereoRingBuffer.swift */,
+				39C7B3B07ABC4AD9A8FB33A8 /* DSPValidation.swift */,
+			);
+			path = Audio;
+			sourceTree = "<group>";
+		};
+		75856ADD288041DFB11E6392 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				9D32B99203DD4FE5A772E8E7 /* AudioDeviceInfo.swift */,
+				E005B4279DD947849E668F1D /* AppAudioNode.swift */,
+				21873007A0F047A3A7A1D226 /* AutoEQProfile.swift */,
+				2C5C1E0FD23441459CED7F48 /* EQPreset.swift */,
+				7E1CCCBA5BC64F5DB59D7986 /* EqualizerBand.swift */,
+				C1NOWPLAY001FR00000000001 /* NowPlayingItem.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		4C6FD4CCA98D436B9651DE30 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				FD425773B7224002A1F815B4 /* Presets */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		FD425773B7224002A1F815B4 /* Presets */ = {
+			isa = PBXGroup;
+			children = (
+				24B96979A256444A84C84D4D /* flat.json */,
+			);
+			path = Presets;
+			sourceTree = "<group>";
+		};
+		470E93D136494F409AC6B360 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				88C4822BFD854251BD780412 /* LaunchAtLoginService.swift */,
+				BF433422AFFD4661B8B2C04B /* AudioDeviceManager.swift */,
+				74849DEDB50A4EA5ACB2EF60 /* AutoEQImporter.swift */,
+				4704AA9F75B84C9A9B00398E /* PresetStore.swift */,
+				217A55CD95C4404BA3C78AE1 /* ProcessIdentity.swift */,
+				C1NOWPLAY002FR00000000002 /* MediaRemoteBridge.swift */,
+				C1NOWPLAY003FR00000000003 /* SpotifyController.swift */,
+				C1NOWPLAY004FR00000000004 /* NowPlayingService.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		8480D365D52F4E1BAFFA88CB /* UI */ = {
+			isa = PBXGroup;
+			children = (
+				C8E3DFF9D0904E00ACA0AAD6 /* AppVolumeCard.swift */,
+				D154B42710F94498BEE044C6 /* Components */,
+				AB0386425AEB4EAEA4B19442 /* ContentView.swift */,
+				3A3827083A1E47FA861AF8F5 /* EqualizerView.swift */,
+				E15F14FC5C87417F82F84DFF /* EqualizerViewModel.swift */,
+				C1NOTCH000GR00000000000 /* Notch */,
+				C1NOWPLAY005FR00000000005 /* NowPlayingView.swift */,
+				FA12410F83E042BF9911384B /* VisualizerView.swift */,
+			);
+			path = UI;
+			sourceTree = "<group>";
+		};
+		C1NOTCH000GR00000000000 /* Notch */ = {
+			isa = PBXGroup;
+			children = (
+				C1NOTCH001FR00000000001 /* NotchPanel.swift */,
+				C1NOTCH002FR00000000002 /* NotchGeometry.swift */,
+				C1NOTCH003FR00000000003 /* NotchShape.swift */,
+				C1NOTCH004FR00000000004 /* NotchNowPlayingController.swift */,
+				C1NOTCH005FR00000000005 /* NotchNowPlayingView.swift */,
+			);
+			path = Notch;
+			sourceTree = "<group>";
+		};
+		D154B42710F94498BEE044C6 /* Components */ = {
+			isa = PBXGroup;
+			children = (
+				AE013232538942E1A6021F27 /* GlassChrome.swift */,
+				C1SEEK001FR00000000001 /* NowPlayingSeekBar.swift */,
+			);
+			path = Components;
+			sourceTree = "<group>";
+		};
+		FA0710E79EEF48A0A222CB4F = {
+			isa = PBXGroup;
+			children = (
+				566C122461E44843BE2DF07C /* OmniLevel */,
+				C7E53ADE7D6B47CDA5FACDA4 /* Products */,
+				F79921C67D9E437CA24470C7 /* Frameworks */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		CEFD191EB0554C119A94B229 /* OmniLevel */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 74CFFE29E8A340478684BDA7 /* Build configuration list for PBXNativeTarget "OmniLevel" */;
+			buildPhases = (
+				6981982807E1414B85BAAAEE /* Sources */,
+				47703ECDE69842578A160509 /* Frameworks */,
+				D0D1DCF091BB4F78BC9CAA0C /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = OmniLevel;
+			productName = OmniLevel;
+			productReference = E4E8DE58B65E41818FCC9DE6 /* OmniLevel.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A5AA06371D264B48AA336CE5 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+			};
+			buildConfigurationList = D6B08DB60C3941699A865219 /* Build configuration list for PBXProject "OmniLevel" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = FA0710E79EEF48A0A222CB4F;
+			productRefGroup = C7E53ADE7D6B47CDA5FACDA4 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				CEFD191EB0554C119A94B229 /* OmniLevel */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		D0D1DCF091BB4F78BC9CAA0C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D4A2DF2A09F541FCB19F50FA /* Assets.xcassets in Resources */,
+				5F8F2AE1D14D45B9ABDA1C88 /* flat.json in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		6981982807E1414B85BAAAEE /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5CB5650623FA4C52B8416F44 /* LaunchAtLoginService.swift in Sources */,
+				F378647E6E864EDBA2A1C6E7 /* AudioDeviceManager.swift in Sources */,
+				561C425AEE994BE2A596F0E4 /* AudioDeviceInfo.swift in Sources */,
+				2B212F80E079434282538BF8 /* AppDelegate.swift in Sources */,
+				41C419F45189435EB37816DD /* OmniLevelApp.swift in Sources */,
+				1B116BDD629742D9AE05D590 /* AppAudioTapManager.swift in Sources */,
+				0B4C0F400D414E369451218C /* AudioEngineController.swift in Sources */,
+				0BCAA4F46E2441D08CEC59DD /* AudioLevels.swift in Sources */,
+				1739BAFFF672441ABBC28ABA /* AutoPreAmpLimiter.swift in Sources */,
+				CD3B5DDB57F542BAA9D9A88C /* EqualizerDSP.swift in Sources */,
+				AC194965007B4C4E9C3D0EBC /* GainPanMixer.swift in Sources */,
+				FB1371BDBB7245799F4DDC4B /* ProcessTapIO.swift in Sources */,
+				15075F671B884615BAE3171C /* SpectrumAnalyzer.swift in Sources */,
+				A1B2C3D4E5F60718293A4B5C /* StereoRingBuffer.swift in Sources */,
+				3ABE6B4197AC4FCD97923772 /* AppAudioNode.swift in Sources */,
+				3A7B5162A2E9429498813C69 /* AutoEQProfile.swift in Sources */,
+				219BEED4D583456B89B1EB9E /* EQPreset.swift in Sources */,
+				ACD8C298FF1842F9AF3C949A /* EqualizerBand.swift in Sources */,
+				7F627553EA4C4F60A117005F /* AutoEQImporter.swift in Sources */,
+				393667BAE03B436988F9FD94 /* PresetStore.swift in Sources */,
+				92C64D7D91FD4243A580FEFE /* ProcessIdentity.swift in Sources */,
+				04C3CDF2CE934C4F92AA7147 /* AppVolumeCard.swift in Sources */,
+				22D86FC72E684306A209C06D /* GlassChrome.swift in Sources */,
+				42EB3D01B470467AB26EDB18 /* ContentView.swift in Sources */,
+				79D020956EC14DC28E0BB161 /* EqualizerView.swift in Sources */,
+				BC80AA18DD3C4F5E8D60A869 /* EqualizerViewModel.swift in Sources */,
+				1C7F3DD6B0C2403D975F491F /* VisualizerView.swift in Sources */,
+				C1NOWPLAY001BF00000000001 /* NowPlayingItem.swift in Sources */,
+				C1NOWPLAY002BF00000000002 /* MediaRemoteBridge.swift in Sources */,
+				C1NOWPLAY003BF00000000003 /* SpotifyController.swift in Sources */,
+				C1NOWPLAY004BF00000000004 /* NowPlayingService.swift in Sources */,
+				C1NOWPLAY005BF00000000005 /* NowPlayingView.swift in Sources */,
+				C1NOTCH001BF00000000001 /* NotchPanel.swift in Sources */,
+				C1NOTCH002BF00000000002 /* NotchGeometry.swift in Sources */,
+				C1NOTCH003BF00000000003 /* NotchShape.swift in Sources */,
+				C1NOTCH004BF00000000004 /* NotchNowPlayingController.swift in Sources */,
+				C1NOTCH005BF00000000005 /* NotchNowPlayingView.swift in Sources */,
+				C1SEEK001BF00000000001 /* NowPlayingSeekBar.swift in Sources */,
+				15DEB2CEFCF948B4BA18D9FC /* DSPValidation.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		95AC5748BF5D4F9F9069B0E2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				MACOSX_DEPLOYMENT_TARGET = 14.2;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		ED8B66CD9BF64FE9B945D1F8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				MACOSX_DEPLOYMENT_TARGET = 14.2;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		4ED37BD7C4A345C6BE244AB5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = OmniLevel/App/OmniLevel.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = OmniLevel/App/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.2;
+				MARKETING_VERSION = 1.0;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.omnilevel.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		E3A98AF7C0844722B62666EA /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = OmniLevel/App/OmniLevel.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = OmniLevel/App/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.omnilevel.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		D6B08DB60C3941699A865219 /* Build configuration list for PBXProject "OmniLevel" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				95AC5748BF5D4F9F9069B0E2 /* Debug */,
+				ED8B66CD9BF64FE9B945D1F8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		74CFFE29E8A340478684BDA7 /* Build configuration list for PBXNativeTarget "OmniLevel" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4ED37BD7C4A345C6BE244AB5 /* Debug */,
+				E3A98AF7C0844722B62666EA /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A5AA06371D264B48AA336CE5 /* Project object */;
+}
