@@ -16,22 +16,50 @@ public enum EQSessionStorage {
     }
 
     public static func load() -> EQSessionState? {
-        if let data = UserDefaults.standard.data(forKey: defaultsKey),
-           let session = decode(data) {
+        let udSession: EQSessionState? = {
+            if let data = UserDefaults.standard.data(forKey: defaultsKey),
+               let session = decode(data) {
+                return session
+            }
+            // Migrate v1 if present.
+            if let data = UserDefaults.standard.data(forKey: "omniLevel.lastEQSession.v1"),
+               let session = decode(data) {
+                return session
+            }
+            return nil
+        }()
+
+        let fileSession: EQSessionState? = {
+            guard let data = try? Data(contentsOf: sessionFileURL),
+                  let session = decode(data) else { return nil }
             return session
+        }()
+
+        let fileMTime: TimeInterval? = {
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: sessionFileURL.path),
+                  let date = attrs[.modificationDate] as? Date else { return nil }
+            return date.timeIntervalSinceReferenceDate
+        }()
+
+        switch (udSession, fileSession) {
+        case let (ud?, file?):
+            let udTime = ud.savedAt ?? 0
+            let fileTime = file.savedAt ?? fileMTime ?? 0
+            let chosen = fileTime >= udTime ? file : ud
+            // Keep both stores aligned to the newer session.
+            if chosen != ud || chosen != file {
+                save(chosen)
+            }
+            return chosen
+        case let (ud?, nil):
+            save(ud) // refresh file
+            return ud
+        case let (nil, file?):
+            save(file) // refresh UserDefaults
+            return file
+        case (nil, nil):
+            return nil
         }
-        // Migrate v1 if present.
-        if let data = UserDefaults.standard.data(forKey: "omniLevel.lastEQSession.v1"),
-           let session = decode(data) {
-            save(session)
-            return session
-        }
-        if let data = try? Data(contentsOf: sessionFileURL),
-           let session = decode(data) {
-            save(session) // refresh UserDefaults
-            return session
-        }
-        return nil
     }
 
     public static func save(_ session: EQSessionState) {
@@ -39,17 +67,21 @@ public enum EQSessionStorage {
             log.error("reject session: gains=\(session.gainsdB.count)")
             return
         }
-        guard let data = try? JSONEncoder().encode(session) else {
+        var stamped = session
+        if stamped.savedAt == nil {
+            stamped.savedAt = Date().timeIntervalSinceReferenceDate
+        }
+        guard let data = try? JSONEncoder().encode(stamped) else {
             log.error("encode failed")
             return
         }
 
         UserDefaults.standard.set(data, forKey: defaultsKey)
         // Also store simple fields for robustness / debugging.
-        UserDefaults.standard.set(session.name, forKey: "omniLevel.eqName")
-        UserDefaults.standard.set(session.gainsdB.map { Double($0) }, forKey: "omniLevel.eqGains")
-        UserDefaults.standard.set(session.autoPreAmpEnabled, forKey: "omniLevel.eqAutoPreAmp")
-        if let id = session.presetID {
+        UserDefaults.standard.set(stamped.name, forKey: "omniLevel.eqName")
+        UserDefaults.standard.set(stamped.gainsdB.map { Double($0) }, forKey: "omniLevel.eqGains")
+        UserDefaults.standard.set(stamped.autoPreAmpEnabled, forKey: "omniLevel.eqAutoPreAmp")
+        if let id = stamped.presetID {
             UserDefaults.standard.set(id.uuidString, forKey: selectedIDKey)
         } else {
             UserDefaults.standard.removeObject(forKey: selectedIDKey)
@@ -58,7 +90,7 @@ public enum EQSessionStorage {
 
         do {
             try data.write(to: sessionFileURL, options: .atomic)
-            log.info("saved EQ session “\(session.name, privacy: .public)” autoPreAmp=\(session.autoPreAmpEnabled)")
+            log.info("saved EQ session “\(stamped.name, privacy: .public)” autoPreAmp=\(stamped.autoPreAmpEnabled)")
         } catch {
             log.error("file write failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -140,7 +172,8 @@ public final class PresetStore: ObservableObject {
                 presetID: preset.id,
                 gainsdB: gainsdB,
                 qFactors: qFactors,
-                autoPreAmpEnabled: false
+                autoPreAmpEnabled: false,
+                savedAt: Date().timeIntervalSinceReferenceDate
             )
         )
     }

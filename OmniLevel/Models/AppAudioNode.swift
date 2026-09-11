@@ -12,6 +12,12 @@ public struct AppAudioNode: Identifiable, Equatable {
     public var isSolo: Bool
     public var isTapped: Bool
     public var peakLeveldB: Float
+    /// True when this app has a stored per-app EQ curve (not using global).
+    public var hasEQOverride: Bool
+    /// Preferred output device UID; `nil` = System Default (global selected output).
+    public var outputDeviceUID: String?
+    /// True when the preferred device was unavailable and we fell back to System Default.
+    public var outputFallback: Bool
 
     public init(
         id: pid_t,
@@ -23,7 +29,10 @@ public struct AppAudioNode: Identifiable, Equatable {
         isMuted: Bool = false,
         isSolo: Bool = false,
         isTapped: Bool = false,
-        peakLeveldB: Float = -60
+        peakLeveldB: Float = -60,
+        hasEQOverride: Bool = false,
+        outputDeviceUID: String? = nil,
+        outputFallback: Bool = false
     ) {
         self.id = id
         self.appName = appName
@@ -35,6 +44,9 @@ public struct AppAudioNode: Identifiable, Equatable {
         self.isSolo = isSolo
         self.isTapped = isTapped
         self.peakLeveldB = peakLeveldB
+        self.hasEQOverride = hasEQOverride
+        self.outputDeviceUID = outputDeviceUID
+        self.outputFallback = outputFallback
     }
 
     public var volumePercent: Int {

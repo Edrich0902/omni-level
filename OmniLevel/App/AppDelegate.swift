@@ -63,6 +63,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         self.popover = popover
 
         tapManager.bootstrap()
+        // Only flush when we restored a real session — avoid writing Flat stubs after cold start.
+        if equalizerVM.didRestoreRealSession {
+            equalizerVM.flushSessionToDisk()
+        }
 
         let notch = NotchNowPlayingController(service: nowPlaying)
         notch.start()
@@ -70,7 +74,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        equalizerVM.flushSessionToDisk()
+        if equalizerVM.didRestoreRealSession
+            || equalizerVM.selectedPresetName != "Flat"
+            || equalizerVM.bands.contains(where: { abs($0.gaindB) >= 0.01 }) {
+            equalizerVM.flushSessionToDisk()
+        }
         removeClickMonitors()
         notchController?.stop()
         nowPlaying.stop()

@@ -4,7 +4,7 @@ import CoreAudio
 import Foundation
 import os
 
-/// Per-app process-tap capture (TN2091 input callback each) → gain/balance mix → EQ → speakers.
+/// Per-app process-tap capture → gain/pan → per-stream EQ → per-destination mix buses → speakers.
 @MainActor
 public final class AudioEngineController: ObservableObject {
     public enum EngineState: Equatable {
@@ -12,6 +12,9 @@ public final class AudioEngineController: ObservableObject {
         case running
         case error(String)
     }
+
+    /// Stable destination key for mix buses (`nil` / empty = System Default).
+    nonisolated public static let systemDefaultDestinationKey = ""
 
     @Published public private(set) var state: EngineState = .stopped
     @Published public private(set) var sampleRate: Double = 48_000
@@ -22,26 +25,69 @@ public final class AudioEngineController: ObservableObject {
     @Published public private(set) var isRouting = false
     @Published public private(set) var lastIOError: String?
     @Published public private(set) var activeStreamCount: Int = 0
+    /// Human-readable active output destinations for the status line.
+    @Published public private(set) var activeOutputSummary: String = ""
+    @Published public private(set) var eqOverrideCount: Int = 0
 
     public let equalizer = EqualizerDSP()
     public let limiter = AutoPreAmpLimiter()
     public let mixer = GainPanMixer()
     public let levels = AudioLevels()
-    /// Post-EQ / post-mix spectrum (what you hear).
+    /// Post-EQ / post-mix spectrum (primary / system-default bus).
     public let spectrum = SpectrumAnalyzer()
     /// Pre-EQ mix bus spectrum (material before the equalizer).
     public let spectrumInput = SpectrumAnalyzer()
+    /// Per-app EQ editor meters — only the focused stream.
+    public let focusedSpectrum = SpectrumAnalyzer()
+    public let focusedSpectrumInput = SpectrumAnalyzer()
     public let processTaps = ProcessTapIO()
     public let devices = AudioDeviceManager()
 
-    private var mixContext: MixContext?
+    private var sharedMix: SharedMixState?
+    private var outputBuses: [String: OutputBusContext] = [:]
     private var streamContexts: [StreamContext] = []
-    private var outputUnit: AudioComponentInstance?
+    private let eqOverrideTable = EQOverrideTable()
     private var debounceWorkItem: DispatchWorkItem?
     private var suppressDeviceRestart = false
     private var isStarting = false
     private var ioStatusTimer: Timer?
     private let log = Logger(subsystem: "com.omnilevel.app", category: "engine")
+    private let spectrumFocusLock = OSAllocatedUnfairLock(initialState: pid_t(0))
+
+    /// Thread-safe PID → override DSP map for the mix callback.
+    final class EQOverrideTable: @unchecked Sendable {
+        private let lock = OSAllocatedUnfairLock()
+        private var map: [pid_t: EqualizerDSP] = [:]
+
+        func get(_ pid: pid_t) -> EqualizerDSP? {
+            lock.withLock { map[pid] }
+        }
+
+        func set(_ pid: pid_t, dsp: EqualizerDSP) {
+            lock.withLock { map[pid] = dsp }
+        }
+
+        func remove(_ pid: pid_t) {
+            lock.withLock { _ = map.removeValue(forKey: pid) }
+        }
+
+        func removeAll() {
+            lock.withLock { map.removeAll() }
+        }
+
+        func snapshot() -> [pid_t: EqualizerDSP] {
+            lock.withLock { map }
+        }
+
+        var count: Int {
+            lock.withLock { map.count }
+        }
+
+        func forEachDSP(_ body: (EqualizerDSP) -> Void) {
+            let values = lock.withLock { Array(map.values) }
+            values.forEach(body)
+        }
+    }
 
     /// One capture stream (PID) with its own ring and HAL unit.
     final class StreamContext: @unchecked Sendable {
@@ -55,6 +101,8 @@ public final class AudioEngineController: ObservableObject {
         var lastStatus: OSStatus = noErr
         var callbacks: UInt64 = 0
         var framesWithSignal: UInt64 = 0
+        /// Empty string = System Default. Non-empty = specific device UID.
+        var destinationKey: String = AudioEngineController.systemDefaultDestinationKey
 
         init(pid: pid_t, maxFrames: Int = 4_096, ringCapacity: Int = 16_384) {
             self.pid = pid
@@ -76,25 +124,23 @@ public final class AudioEngineController: ObservableObject {
         }
     }
 
-    /// Shared mix / EQ state for the output callback.
-    final class MixContext: @unchecked Sendable {
+    /// Shared mixer / EQ / stream list for all output buses.
+    final class SharedMixState: @unchecked Sendable {
         let equalizer: EqualizerDSP
         let limiter: AutoPreAmpLimiter
         let levels: AudioLevels
         let spectrum: SpectrumAnalyzer
         let spectrumInput: SpectrumAnalyzer
+        let focusedSpectrum: SpectrumAnalyzer
+        let focusedSpectrumInput: SpectrumAnalyzer
         let mixer: GainPanMixer
-        /// Live stream list — swapped under lock so routes can hot-add/remove without stopping output.
         private let streamsLock = OSAllocatedUnfairLock()
         private var streamsStorage: [StreamContext]
-        var mixLeft: UnsafeMutablePointer<Float>
-        var mixRight: UnsafeMutablePointer<Float>
-        var tmpLeft: UnsafeMutablePointer<Float>
-        var tmpRight: UnsafeMutablePointer<Float>
+        private let overridesLock = OSAllocatedUnfairLock()
+        private var overridesStorage: [pid_t: EqualizerDSP]
+        private let focusLock = OSAllocatedUnfairLock()
+        private var focusPIDStorage: pid_t = 0
         let maxFrames: Int
-        var capturePrimed = false
-        var outputCallbacks: UInt64 = 0
-        var spectrumStride: UInt32 = 0
 
         init(
             equalizer: EqualizerDSP,
@@ -102,8 +148,12 @@ public final class AudioEngineController: ObservableObject {
             levels: AudioLevels,
             spectrum: SpectrumAnalyzer,
             spectrumInput: SpectrumAnalyzer,
+            focusedSpectrum: SpectrumAnalyzer,
+            focusedSpectrumInput: SpectrumAnalyzer,
             mixer: GainPanMixer,
             streams: [StreamContext],
+            overrides: [pid_t: EqualizerDSP],
+            focusPID: pid_t = 0,
             maxFrames: Int = 4_096
         ) {
             self.equalizer = equalizer
@@ -111,17 +161,13 @@ public final class AudioEngineController: ObservableObject {
             self.levels = levels
             self.spectrum = spectrum
             self.spectrumInput = spectrumInput
+            self.focusedSpectrum = focusedSpectrum
+            self.focusedSpectrumInput = focusedSpectrumInput
             self.mixer = mixer
             self.streamsStorage = streams
+            self.overridesStorage = overrides
+            self.focusPIDStorage = focusPID
             self.maxFrames = maxFrames
-            self.mixLeft = .allocate(capacity: maxFrames)
-            self.mixRight = .allocate(capacity: maxFrames)
-            self.tmpLeft = .allocate(capacity: maxFrames)
-            self.tmpRight = .allocate(capacity: maxFrames)
-            mixLeft.initialize(repeating: 0, count: maxFrames)
-            mixRight.initialize(repeating: 0, count: maxFrames)
-            tmpLeft.initialize(repeating: 0, count: maxFrames)
-            tmpRight.initialize(repeating: 0, count: maxFrames)
         }
 
         var streams: [StreamContext] {
@@ -132,11 +178,73 @@ public final class AudioEngineController: ObservableObject {
             streamsLock.withLock { streamsStorage = next }
         }
 
+        func setOverrides(_ next: [pid_t: EqualizerDSP]) {
+            overridesLock.withLock { overridesStorage = next }
+        }
+
+        func setFocusPID(_ pid: pid_t) {
+            focusLock.withLock { focusPIDStorage = pid }
+        }
+
+        var focusPID: pid_t {
+            focusLock.withLock { focusPIDStorage }
+        }
+
+        /// Override DSP only — nil means this stream should use the shared post-mix global EQ.
+        func overrideEqualizer(for pid: pid_t) -> EqualizerDSP? {
+            overridesLock.withLock { overridesStorage[pid] }
+        }
+
+        func equalizer(for pid: pid_t) -> EqualizerDSP {
+            overrideEqualizer(for: pid) ?? equalizer
+        }
+    }
+
+    /// One HAL output unit + mix buffers for a destination.
+    final class OutputBusContext: @unchecked Sendable {
+        let destinationKey: String
+        let shared: SharedMixState
+        let isPrimary: Bool
+        var mixLeft: UnsafeMutablePointer<Float>
+        var mixRight: UnsafeMutablePointer<Float>
+        var tmpLeft: UnsafeMutablePointer<Float>
+        var tmpRight: UnsafeMutablePointer<Float>
+        /// Accumulates streams that use the shared global EQ (processed once per buffer).
+        var globalLeft: UnsafeMutablePointer<Float>
+        var globalRight: UnsafeMutablePointer<Float>
+        let maxFrames: Int
+        var capturePrimed = false
+        var outputCallbacks: UInt64 = 0
+        var spectrumStride: UInt32 = 0
+        var unit: AudioComponentInstance?
+        var deviceID: AudioObjectID = kAudioObjectUnknown
+
+        init(destinationKey: String, shared: SharedMixState, isPrimary: Bool) {
+            self.destinationKey = destinationKey
+            self.shared = shared
+            self.isPrimary = isPrimary
+            self.maxFrames = shared.maxFrames
+            self.mixLeft = .allocate(capacity: shared.maxFrames)
+            self.mixRight = .allocate(capacity: shared.maxFrames)
+            self.tmpLeft = .allocate(capacity: shared.maxFrames)
+            self.tmpRight = .allocate(capacity: shared.maxFrames)
+            self.globalLeft = .allocate(capacity: shared.maxFrames)
+            self.globalRight = .allocate(capacity: shared.maxFrames)
+            mixLeft.initialize(repeating: 0, count: shared.maxFrames)
+            mixRight.initialize(repeating: 0, count: shared.maxFrames)
+            tmpLeft.initialize(repeating: 0, count: shared.maxFrames)
+            tmpRight.initialize(repeating: 0, count: shared.maxFrames)
+            globalLeft.initialize(repeating: 0, count: shared.maxFrames)
+            globalRight.initialize(repeating: 0, count: shared.maxFrames)
+        }
+
         deinit {
             mixLeft.deallocate()
             mixRight.deallocate()
             tmpLeft.deallocate()
             tmpRight.deallocate()
+            globalLeft.deallocate()
+            globalRight.deallocate()
         }
     }
 
@@ -146,24 +254,21 @@ public final class AudioEngineController: ObservableObject {
         inputDeviceName = devices.inputName()
         outputDeviceName = devices.outputName()
         installDefaultOutputListener()
+        installDeviceListListener()
     }
 
     // MARK: - Public
 
-    /// Start routing for the given app PIDs (each gets its own process tap + volume/balance).
-    /// Uses a seamless differential update when already routing so open/close of apps
-    /// does not tear down living streams.
-    public func startSystemRouting(routedPIDs: [pid_t] = []) {
+    /// Start routing for the given app clusters (each card PID gets its own process tap + volume/balance).
+    public func startSystemRouting(routedClusters: [ProcessTapIO.TapCluster]) {
         guard !isStarting else { return }
 
-        // Hot path: differential add/remove — keep output unit + surviving taps alive.
-        if isRouting, mixContext != nil, outputUnit != nil {
+        if isRouting, sharedMix != nil, !outputBuses.isEmpty {
             do {
-                try updateSystemRouting(routedPIDs: routedPIDs)
+                try updateSystemRouting(routedClusters: routedClusters)
                 return
             } catch {
                 log.error("differential update failed, full restart: \(error.localizedDescription, privacy: .public)")
-                // Fall through to full rebuild.
             }
         }
 
@@ -184,16 +289,16 @@ public final class AudioEngineController: ObservableObject {
         }
 
         do {
-            let outputID = preferredOutputDeviceID()
-            let handles = try processTaps.startAppTaps(pids: routedPIDs)
-            try configureGraph(appTaps: handles, outputDeviceID: outputID)
+            let handles = try processTaps.startAppTaps(clusters: routedClusters)
+            try configureGraph(appTaps: handles)
             syncPreAmpFromEQ()
             state = .running
             isRouting = true
             activeStreamCount = handles.count
             lastIOError = nil
             startIOStatusPoll()
-            log.info("routing \(handles.count) app streams → out=\(outputID)")
+            refreshActiveOutputSummary()
+            log.info("routing \(handles.count) app streams → \(self.outputBuses.count) outputs")
         } catch {
             stopSystemRouting()
             state = .error(error.localizedDescription)
@@ -202,35 +307,33 @@ public final class AudioEngineController: ObservableObject {
         }
     }
 
-    /// Add/remove process taps and capture streams without stopping the shared output unit.
+    public func startSystemRouting(routedPIDs: [pid_t] = []) {
+        startSystemRouting(routedClusters: routedPIDs.map {
+            ProcessTapIO.TapCluster(keyPID: $0, audioPIDs: [$0])
+        })
+    }
+
     @available(macOS 14.2, *)
-    private func updateSystemRouting(routedPIDs: [pid_t]) throws {
-        guard let mix = mixContext, outputUnit != nil else {
+    private func updateSystemRouting(routedClusters: [ProcessTapIO.TapCluster]) throws {
+        guard let shared = sharedMix else {
             throw NSError(domain: "OmniLevel", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Graph not ready for differential update"
             ])
         }
 
-        let desired = Set(routedPIDs)
+        let desired = Set(routedClusters.map(\.keyPID))
         let current = Set(streamContexts.map(\.pid))
-        if desired == current {
-            activeStreamCount = streamContexts.count
-            isRouting = true
-            state = .running
-            return
-        }
-
-        let handles = try processTaps.syncAppTaps(pids: routedPIDs)
+        let handles = try processTaps.syncAppTaps(clusters: routedClusters)
         let handleByPID = Dictionary(uniqueKeysWithValues: handles.map { ($0.pid, $0) })
+        let liveKeys = Set(handles.map(\.pid))
 
         let rate = sampleRate > 0 ? sampleRate : ProcessTapIO.deviceSampleRate(preferredOutputDeviceID())
         let bufferFrames: UInt32 = 512
         let asbd = Self.stereoFloatNonInterleavedASBD(sampleRate: rate)
         let ringCap = Int(max(rate, 48_000) * 0.35)
 
-        // Remove streams no longer desired
         var nextStreams = streamContexts
-        let removed = nextStreams.filter { !desired.contains($0.pid) }
+        let removed = nextStreams.filter { !liveKeys.contains($0.pid) }
         for stream in removed {
             if let unit = stream.unit {
                 AudioOutputUnitStop(unit)
@@ -240,17 +343,18 @@ public final class AudioEngineController: ObservableObject {
             stream.unit = nil
             stream.ring.reset()
             mixer.removeStream(stream.pid)
+            // Keep EQ override DSP warm — app may re-route (solo / On-Off) shortly.
         }
-        nextStreams.removeAll { !desired.contains($0.pid) }
+        nextStreams.removeAll { !liveKeys.contains($0.pid) }
 
-        // Add new streams
         let existing = Set(nextStreams.map(\.pid))
-        for pid in desired where !existing.contains(pid) {
+        for pid in liveKeys.sorted() where !existing.contains(pid) {
             guard let handle = handleByPID[pid] else { continue }
             Self.trySetSampleRate(handle.aggregateDeviceID, rate: rate)
             Self.trySetBufferFrames(handle.aggregateDeviceID, frames: bufferFrames)
 
             let stream = StreamContext(pid: handle.pid, ringCapacity: ringCap)
+            stream.destinationKey = normalizedDestinationKey(streamRouteProvider?(handle.pid))
             let unit = try makeHALUnit()
             try setEnableIO(unit, input: true, output: false)
             try setCurrentDevice(unit, handle.aggregateDeviceID)
@@ -276,24 +380,25 @@ public final class AudioEngineController: ObservableObject {
             nextStreams.append(stream)
         }
 
-        // Publish on both controller + live mix callback — no silence, no output restart.
+        // Refresh destinations on surviving streams.
+        for stream in nextStreams {
+            stream.destinationKey = normalizedDestinationKey(streamRouteProvider?(stream.pid))
+        }
+
         streamContexts = nextStreams
-        mix.setStreams(nextStreams)
+        shared.setStreams(nextStreams)
+        try syncOutputBuses(shared: shared, asbd: asbd)
+
         activeStreamCount = nextStreams.count
         isRouting = true
         state = .running
         lastIOError = nil
-        log.info("hot-updated route → \(nextStreams.count) streams (added \(desired.subtracting(current).count), removed \(current.subtracting(desired).count))")
+        refreshActiveOutputSummary()
+        log.info("hot-updated route → \(nextStreams.count) streams / \(self.outputBuses.count) outputs (desired=\(desired.count) currentWas=\(current.count))")
     }
 
-    /// Compatibility: provider may still hand exclude list; prefer routedPIDsProvider.
     public func startSystemRouting(excludePIDs: [pid_t]) {
-        // Legacy signature — derive routed from provider if available.
-        if let provider = routedPIDsProvider {
-            startSystemRouting(routedPIDs: provider())
-        } else {
-            startSystemRouting(routedPIDs: [])
-        }
+        startSystemRouting(routedClusters: currentRoutedClusters())
         _ = excludePIDs
     }
 
@@ -301,15 +406,16 @@ public final class AudioEngineController: ObservableObject {
         stopIOStatusPoll()
         teardownUnits()
         processTaps.destroyAllAppTaps()
-        mixContext = nil
+        sharedMix = nil
         streamContexts = []
         activeStreamCount = 0
         isRouting = false
+        activeOutputSummary = ""
         if case .error = state {} else { state = .stopped }
     }
 
     public func start() {
-        startSystemRouting(routedPIDs: routedPIDsProvider?() ?? [])
+        startSystemRouting(routedClusters: currentRoutedClusters())
     }
 
     public func stop(preserveRing: Bool = false) { stopSystemRouting() }
@@ -324,7 +430,7 @@ public final class AudioEngineController: ObservableObject {
         selectedOutputDeviceID = id
         outputDeviceName = devices.outputName()
         if isRouting {
-            startSystemRouting(routedPIDs: routedPIDsProvider?() ?? [])
+            startSystemRouting(routedClusters: currentRoutedClusters())
         }
     }
 
@@ -342,33 +448,111 @@ public final class AudioEngineController: ObservableObject {
         outputDeviceName = devices.outputName()
     }
 
-    /// Returns which PIDs should be under OmniLevel control with their own tap.
-    var routedPIDsProvider: (() -> [pid_t])?
+    /// Resolve a stored device UID to a live AudioObjectID. Falls back to System Default when missing.
+    public func resolveOutputDevice(uid: String?, refresh: Bool = false) -> (id: AudioObjectID, fallback: Bool, key: String) {
+        if refresh { devices.refresh() }
+        let key = normalizedDestinationKey(uid)
+        if key == Self.systemDefaultDestinationKey {
+            return (preferredOutputDeviceID(), false, key)
+        }
+        if let match = devices.outputDevices.first(where: { $0.uid == key }) {
+            return (match.id, false, key)
+        }
+        return (preferredOutputDeviceID(), true, Self.systemDefaultDestinationKey)
+    }
+
+    // MARK: - Per-stream EQ overrides
+
+    public func setStreamEQOverride(pid: pid_t, gains: [Float], qFactors: [Float]? = nil) {
+        guard gains.count == EqualizerDSP.bandCount else { return }
+        let dsp: EqualizerDSP
+        if let existing = eqOverrideTable.get(pid) {
+            dsp = existing
+        } else {
+            let created = EqualizerDSP()
+            created.setSampleRate(sampleRate > 0 ? sampleRate : 48_000)
+            eqOverrideTable.set(pid, dsp: created)
+            dsp = created
+        }
+        dsp.applyGains(gains, qFactors: qFactors)
+        publishOverrides()
+    }
+
+    public func clearStreamEQOverride(pid: pid_t) {
+        removeEQOverride(pid: pid)
+        publishOverrides()
+    }
+
+    public func clearAllEQOverrides() {
+        eqOverrideTable.removeAll()
+        publishOverrides()
+    }
+
+    public func hasEQOverride(pid: pid_t) -> Bool {
+        eqOverrideTable.get(pid) != nil
+    }
+
+    /// Drive per-app EQ meters from a single stream (`nil` clears focus).
+    public func setSpectrumFocusPID(_ pid: pid_t?) {
+        let value = pid ?? 0
+        spectrumFocusLock.withLock { $0 = value }
+        sharedMix?.setFocusPID(value)
+    }
+
+    private func removeEQOverride(pid: pid_t) {
+        eqOverrideTable.remove(pid)
+    }
+
+    private func publishOverrides() {
+        let snapshot = eqOverrideTable.snapshot()
+        sharedMix?.setOverrides(snapshot)
+        eqOverrideCount = snapshot.count
+    }
+
+    /// Returns which app clusters should be under OmniLevel control with their own tap.
+    var routedClustersProvider: (() -> [ProcessTapIO.TapCluster])?
+    /// Per-stream output UID (`nil` = System Default).
+    var streamRouteProvider: ((pid_t) -> String?)?
+
+    private func currentRoutedClusters() -> [ProcessTapIO.TapCluster] {
+        if let provider = routedClustersProvider {
+            return provider()
+        }
+        return []
+    }
+
+    private func normalizedDestinationKey(_ uid: String?) -> String {
+        guard let uid else { return Self.systemDefaultDestinationKey }
+        let trimmed = uid.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? Self.systemDefaultDestinationKey : trimmed
+    }
 
     // MARK: - Graph
 
     private func preferredOutputDeviceID() -> AudioObjectID {
-        devices.refresh()
         var id = devices.selectedOutputID
+        if id == kAudioObjectUnknown {
+            devices.refresh()
+            id = devices.selectedOutputID
+        }
         if id == kAudioObjectUnknown { id = ProcessTapIO.defaultOutputDeviceID() }
         return id
     }
 
-    private func configureGraph(
-        appTaps: [ProcessTapIO.AppTapHandle],
-        outputDeviceID: AudioObjectID
-    ) throws {
-        selectedOutputDeviceID = outputDeviceID
-        outputDeviceName = Self.deviceName(outputDeviceID) ?? "Default Output"
+    private func configureGraph(appTaps: [ProcessTapIO.AppTapHandle]) throws {
+        let outputID = preferredOutputDeviceID()
+        selectedOutputDeviceID = outputID
+        outputDeviceName = Self.deviceName(outputID) ?? "Default Output"
 
-        let rate = ProcessTapIO.deviceSampleRate(outputDeviceID)
+        let rate = ProcessTapIO.deviceSampleRate(outputID)
         sampleRate = rate
         equalizer.setSampleRate(rate)
         limiter.setSampleRate(rate)
-        Self.trySetSampleRate(outputDeviceID, rate: rate)
+        eqOverrideTable.forEachDSP { $0.setSampleRate(rate) }
 
         let bufferFrames: UInt32 = 512
-        Self.trySetBufferFrames(outputDeviceID, frames: bufferFrames)
+        Self.trySetBufferFrames(outputID, frames: bufferFrames)
+        Self.trySetSampleRate(outputID, rate: rate)
 
         let asbd = Self.stereoFloatNonInterleavedASBD(sampleRate: rate)
         let ringCap = Int(rate * 0.35)
@@ -379,6 +563,7 @@ public final class AudioEngineController: ObservableObject {
             Self.trySetBufferFrames(handle.aggregateDeviceID, frames: bufferFrames)
 
             let stream = StreamContext(pid: handle.pid, ringCapacity: ringCap)
+            stream.destinationKey = normalizedDestinationKey(streamRouteProvider?(handle.pid))
             let unit = try makeHALUnit()
             try setEnableIO(unit, input: true, output: false)
             try setCurrentDevice(unit, handle.aggregateDeviceID)
@@ -404,26 +589,126 @@ public final class AudioEngineController: ObservableObject {
         }
 
         streamContexts = streams
-        let mix = MixContext(
+        let overrides = eqOverrideTable.snapshot()
+        let focusPID = spectrumFocusLock.withLock { $0 }
+        let shared = SharedMixState(
             equalizer: equalizer,
             limiter: limiter,
             levels: levels,
             spectrum: spectrum,
             spectrumInput: spectrumInput,
+            focusedSpectrum: focusedSpectrum,
+            focusedSpectrumInput: focusedSpectrumInput,
             mixer: mixer,
-            streams: streams
+            streams: streams,
+            overrides: overrides,
+            focusPID: focusPID
         )
-        mixContext = mix
+        sharedMix = shared
 
-        // Output unit
+        try syncOutputBuses(shared: shared, asbd: asbd)
+
+        for stream in streams {
+            if let unit = stream.unit {
+                try OSStatusCheck(AudioOutputUnitStart(unit), "Start input pid=\(stream.pid)")
+            }
+        }
+
+        for bus in outputBuses.values {
+            bus.capturePrimed = false
+            if let unit = bus.unit {
+                try OSStatusCheck(AudioOutputUnitStart(unit), "Start output \(bus.destinationKey)")
+            }
+            let weakBus = bus
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.05) {
+                weakBus.capturePrimed = true
+            }
+        }
+    }
+
+    /// Ensure one output bus exists per destination currently used by streams.
+    private func syncOutputBuses(
+        shared: SharedMixState,
+        asbd: AudioStreamBasicDescription
+    ) throws {
+        // Resolve missing UIDs onto System Default before grouping.
+        for stream in streamContexts {
+            let key = stream.destinationKey
+            if key == Self.systemDefaultDestinationKey { continue }
+            let resolved = resolveOutputDevice(uid: key)
+            if resolved.fallback {
+                stream.destinationKey = Self.systemDefaultDestinationKey
+            }
+        }
+
+        var needed = Set(streamContexts.map(\.destinationKey))
+        if needed.isEmpty {
+            needed.insert(Self.systemDefaultDestinationKey)
+        }
+
+        // Tear down unused buses.
+        for key in outputBuses.keys where !needed.contains(key) {
+            if let bus = outputBuses.removeValue(forKey: key), let unit = bus.unit {
+                AudioOutputUnitStop(unit)
+                AudioUnitUninitialize(unit)
+                AudioComponentInstanceDispose(unit)
+                bus.unit = nil
+            }
+        }
+
+        for key in needed {
+            let resolved = resolveOutputDevice(uid: key.isEmpty ? nil : key)
+            let deviceID = resolved.id
+
+            if let existing = outputBuses[key] {
+                if existing.deviceID != deviceID {
+                    if let unit = existing.unit {
+                        AudioOutputUnitStop(unit)
+                        AudioUnitUninitialize(unit)
+                        AudioComponentInstanceDispose(unit)
+                    }
+                    existing.unit = nil
+                    try attachOutputUnit(to: existing, deviceID: deviceID, asbd: asbd)
+                    existing.deviceID = deviceID
+                    if let unit = existing.unit {
+                        try OSStatusCheck(AudioOutputUnitStart(unit), "Restart output \(key)")
+                    }
+                    existing.capturePrimed = true
+                }
+                continue
+            }
+
+            let isPrimary = key == Self.systemDefaultDestinationKey
+            let bus = OutputBusContext(destinationKey: key, shared: shared, isPrimary: isPrimary)
+            try attachOutputUnit(to: bus, deviceID: deviceID, asbd: asbd)
+            bus.deviceID = deviceID
+            outputBuses[key] = bus
+            if isRouting, let unit = bus.unit {
+                try OSStatusCheck(AudioOutputUnitStart(unit), "Start output \(key)")
+                bus.capturePrimed = true
+            }
+        }
+
+        shared.setStreams(streamContexts)
+        refreshActiveOutputSummary()
+    }
+
+    private func attachOutputUnit(
+        to bus: OutputBusContext,
+        deviceID: AudioObjectID,
+        asbd: AudioStreamBasicDescription
+    ) throws {
+        Self.trySetSampleRate(deviceID, rate: sampleRate)
+        Self.trySetBufferFrames(deviceID, frames: 512)
+
         let outUnit = try makeHALUnit()
         try setEnableIO(outUnit, input: false, output: true)
-        try setCurrentDevice(outUnit, outputDeviceID)
-        try setMaxFrames(outUnit, frames: UInt32(mix.maxFrames))
+        try setCurrentDevice(outUnit, deviceID)
+        try setMaxFrames(outUnit, frames: UInt32(bus.maxFrames))
         try setStreamFormat(outUnit, scope: kAudioUnitScope_Input, element: 0, asbd: asbd)
 
-        let mixRef = Unmanaged.passUnretained(mix).toOpaque()
-        var outputCB = AURenderCallbackStruct(inputProc: mixOutputCallback, inputProcRefCon: mixRef)
+        let ref = Unmanaged.passUnretained(bus).toOpaque()
+        var outputCB = AURenderCallbackStruct(inputProc: mixOutputCallback, inputProcRefCon: ref)
         try OSStatusCheck(
             AudioUnitSetProperty(
                 outUnit,
@@ -436,32 +721,19 @@ public final class AudioEngineController: ObservableObject {
             "SetRenderCallback"
         )
         try OSStatusCheck(AudioUnitInitialize(outUnit), "Initialize output unit")
-
-        // Start captures immediately; prime output after a brief, non-blocking delay
-        // so the main thread never stalls in Thread.sleep.
-        for stream in streams {
-            if let unit = stream.unit {
-                try OSStatusCheck(AudioOutputUnitStart(unit), "Start input pid=\(stream.pid)")
-            }
-        }
-
-        mix.capturePrimed = false
-        try OSStatusCheck(AudioOutputUnitStart(outUnit), "Start output unit")
-        outputUnit = outUnit
-
-        let weakMix = mix
-        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.05) {
-            weakMix.capturePrimed = true
-        }
+        bus.unit = outUnit
     }
 
     private func teardownUnits() {
-        if let out = outputUnit {
-            AudioOutputUnitStop(out)
-            AudioUnitUninitialize(out)
-            AudioComponentInstanceDispose(out)
+        for bus in outputBuses.values {
+            if let unit = bus.unit {
+                AudioOutputUnitStop(unit)
+                AudioUnitUninitialize(unit)
+                AudioComponentInstanceDispose(unit)
+            }
+            bus.unit = nil
         }
-        outputUnit = nil
+        outputBuses.removeAll()
 
         for stream in streamContexts {
             if let unit = stream.unit {
@@ -475,22 +747,41 @@ public final class AudioEngineController: ObservableObject {
         streamContexts = []
     }
 
+    private func refreshActiveOutputSummary() {
+        if outputBuses.isEmpty {
+            activeOutputSummary = outputDeviceName
+            return
+        }
+        let names: [String] = outputBuses.keys.sorted().map { key in
+            if key == Self.systemDefaultDestinationKey {
+                return outputDeviceName
+            }
+            return devices.outputDevices.first(where: { $0.uid == key })?.name ?? key
+        }
+        // Unique while preserving order
+        var seen = Set<String>()
+        let unique = names.filter { seen.insert($0).inserted }
+        activeOutputSummary = unique.joined(separator: " · ")
+    }
+
     private func startIOStatusPoll() {
         stopIOStatusPoll()
         ioStatusTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, let mix = self.mixContext else { return }
-                let totalCB = mix.streams.reduce(UInt64(0)) { $0 + $1.callbacks }
-                let failing = mix.streams.filter { $0.lastStatus != noErr }.count
-                let live = mix.streams.filter { $0.framesWithSignal > 0 }.count
+                guard let self, let shared = self.sharedMix else { return }
+                let streams = shared.streams
+                let totalCB = streams.reduce(UInt64(0)) { $0 + $1.callbacks }
+                let failing = streams.filter { $0.lastStatus != noErr }.count
+                let live = streams.filter { $0.framesWithSignal > 0 }.count
+                let outCB = self.outputBuses.values.reduce(UInt64(0)) { $0 + $1.outputCallbacks }
                 let next: String?
-                if mix.streams.isEmpty {
+                if streams.isEmpty {
                     next = "No app taps"
                 } else if totalCB == 0 {
                     next = "No capture callbacks"
-                } else if failing == mix.streams.count, mix.streams.count > 0 {
-                    next = "All captures failing (\(mix.streams.first?.lastStatus ?? 0))"
-                } else if live == 0, mix.outputCallbacks > 80 {
+                } else if failing == streams.count, streams.count > 0 {
+                    next = "All captures failing (\(streams.first?.lastStatus ?? 0))"
+                } else if live == 0, outCB > 80 {
                     next = "Taps silent (play audio in an On app)"
                 } else {
                     next = nil
@@ -636,10 +927,39 @@ public final class AudioEngineController: ObservableObject {
                 let work = DispatchWorkItem { [weak self] in
                     guard let self, self.isRouting, !self.suppressDeviceRestart else { return }
                     self.refreshDevices()
-                    self.startSystemRouting(routedPIDs: self.routedPIDsProvider?() ?? [])
+                    self.startSystemRouting(routedClusters: self.currentRoutedClusters())
                 }
                 self.debounceWorkItem = work
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+            }
+        }
+        AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            DispatchQueue.global(qos: .userInitiated),
+            block
+        )
+    }
+
+    private func installDeviceListListener() {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            DispatchQueue.main.async {
+                guard let self, !self.suppressDeviceRestart else { return }
+                self.debounceWorkItem?.cancel()
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self else { return }
+                    self.refreshDevices()
+                    NotificationCenter.default.post(name: .omniLevelOutputDevicesDidChange, object: nil)
+                    guard self.isRouting, !self.suppressDeviceRestart else { return }
+                    self.startSystemRouting(routedClusters: self.currentRoutedClusters())
+                }
+                self.debounceWorkItem = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
             }
         }
         AudioObjectAddPropertyListenerBlock(
@@ -689,7 +1009,7 @@ private func streamInputCallback(
     return noErr
 }
 
-// MARK: - Mix + EQ output
+// MARK: - Per-destination mix + per-stream EQ
 
 private func mixOutputCallback(
     inRefCon: UnsafeMutableRawPointer,
@@ -700,80 +1020,109 @@ private func mixOutputCallback(
     ioData: UnsafeMutablePointer<AudioBufferList>?
 ) -> OSStatus {
     guard let ioData else { return noErr }
-    let ctx = Unmanaged<AudioEngineController.MixContext>.fromOpaque(inRefCon).takeUnretainedValue()
-    ctx.outputCallbacks &+= 1
+    let bus = Unmanaged<AudioEngineController.OutputBusContext>.fromOpaque(inRefCon).takeUnretainedValue()
+    let ctx = bus.shared
+    bus.outputCallbacks &+= 1
 
     let frames = Int(inNumberFrames)
-    guard frames > 0, frames <= ctx.maxFrames else {
+    guard frames > 0, frames <= bus.maxFrames else {
         zeroABL(ioData)
         return noErr
     }
 
-    if !ctx.capturePrimed {
+    if !bus.capturePrimed {
         zeroABL(ioData)
         return noErr
     }
 
-    // Clear mix bus
-    memset(ctx.mixLeft, 0, frames * 4)
-    memset(ctx.mixRight, 0, frames * 4)
+    memset(bus.mixLeft, 0, frames * 4)
+    memset(bus.mixRight, 0, frames * 4)
+    memset(bus.globalLeft, 0, frames * 4)
+    memset(bus.globalRight, 0, frames * 4)
 
-    // Sum each app with its volume / balance / mute / solo
-    for stream in ctx.streams {
-        let got = stream.ring.read(left: ctx.tmpLeft, right: ctx.tmpRight, count: frames)
-        if got == 0 { continue }
-        ctx.mixer.mix(
+    let focusPID = ctx.focusPID
+    var fedFocus = false
+    bus.spectrumStride &+= 1
+    let meterThisBlock = (bus.spectrumStride & 3) == 0
+
+    // Per stream: gain/pan, then either dedicated override EQ or accumulate for one global EQ pass.
+    for stream in ctx.streams where stream.destinationKey == bus.destinationKey {
+        let got = stream.ring.read(left: bus.tmpLeft, right: bus.tmpRight, count: frames)
+        guard got > 0 else { continue }
+        // Only process real samples — do not EQ/mix the zero-padded underrun tail.
+        let n = got
+
+        ctx.mixer.applyStereo(
             pid: stream.pid,
-            sourceLeft: ctx.tmpLeft,
-            sourceRight: ctx.tmpRight,
-            destLeft: ctx.mixLeft,
-            destRight: ctx.mixRight,
-            frameCount: frames
+            left: bus.tmpLeft,
+            right: bus.tmpRight,
+            frameCount: n
         )
+
+        let isFocus = focusPID != 0 && stream.pid == focusPID
+        if isFocus, meterThisBlock {
+            ctx.focusedSpectrumInput.push(samples: bus.tmpLeft, count: n)
+            fedFocus = true
+        }
+
+        if let overrideEQ = ctx.overrideEqualizer(for: stream.pid) {
+            overrideEQ.processChannels(left: bus.tmpLeft, right: bus.tmpRight, frameCount: n)
+            if isFocus, meterThisBlock {
+                ctx.focusedSpectrum.push(samples: bus.tmpLeft, count: n)
+            }
+            vDSP_vadd(bus.mixLeft, 1, bus.tmpLeft, 1, bus.mixLeft, 1, vDSP_Length(n))
+            vDSP_vadd(bus.mixRight, 1, bus.tmpRight, 1, bus.mixRight, 1, vDSP_Length(n))
+        } else {
+            vDSP_vadd(bus.globalLeft, 1, bus.tmpLeft, 1, bus.globalLeft, 1, vDSP_Length(n))
+            vDSP_vadd(bus.globalRight, 1, bus.tmpRight, 1, bus.globalRight, 1, vDSP_Length(n))
+        }
     }
 
-    // Soft-clip if multiple apps sum hot (vectorized hard clip).
-    var negOne: Float = -1
-    var posOne: Float = 1
-    vDSP_vclip(ctx.mixLeft, 1, &negOne, &posOne, ctx.mixLeft, 1, vDSP_Length(frames))
-    vDSP_vclip(ctx.mixRight, 1, &negOne, &posOne, ctx.mixRight, 1, vDSP_Length(frames))
+    // Focused app silent → meters decay to empty (don't show other apps' energy).
+    if focusPID != 0, !fedFocus, meterThisBlock {
+        memset(bus.tmpLeft, 0, frames * 4)
+        ctx.focusedSpectrumInput.push(samples: bus.tmpLeft, count: frames)
+        ctx.focusedSpectrum.push(samples: bus.tmpLeft, count: frames)
+    }
 
-    // Input spectrum (pre-EQ) — every 4th block is enough for UI meters.
-    ctx.spectrumStride &+= 1
-    if (ctx.spectrumStride & 3) == 0 {
-        // Mid mix mono for analyzer
+    ctx.equalizer.processChannels(left: bus.globalLeft, right: bus.globalRight, frameCount: frames)
+    vDSP_vadd(bus.mixLeft, 1, bus.globalLeft, 1, bus.mixLeft, 1, vDSP_Length(frames))
+    vDSP_vadd(bus.mixRight, 1, bus.globalRight, 1, bus.mixRight, 1, vDSP_Length(frames))
+
+    if bus.isPrimary, meterThisBlock {
         var half: Float = 0.5
-        vDSP_vasm(ctx.mixLeft, 1, ctx.mixRight, 1, &half, ctx.tmpLeft, 1, vDSP_Length(frames))
-        // vasm is a+b then *C? Actually vDSP_vasm: C*(A+B). Good for (L+R)*0.5
-        ctx.spectrumInput.push(samples: ctx.tmpLeft, count: frames)
+        vDSP_vasm(bus.mixLeft, 1, bus.mixRight, 1, &half, bus.tmpLeft, 1, vDSP_Length(frames))
+        ctx.spectrumInput.push(samples: bus.tmpLeft, count: frames)
     }
 
-    ctx.equalizer.processChannels(left: ctx.mixLeft, right: ctx.mixRight, frameCount: frames)
-    ctx.limiter.process(left: ctx.mixLeft, right: ctx.mixRight, frameCount: frames)
-    ctx.levels.process(left: ctx.mixLeft, right: ctx.mixRight, frameCount: frames)
-    if (ctx.spectrumStride & 3) == 0 {
-        ctx.spectrum.push(samples: ctx.mixLeft, count: frames)
+    ctx.limiter.process(left: bus.mixLeft, right: bus.mixRight, frameCount: frames)
+
+    if bus.isPrimary {
+        ctx.levels.process(left: bus.mixLeft, right: bus.mixRight, frameCount: frames)
+        if meterThisBlock {
+            ctx.spectrum.push(samples: bus.mixLeft, count: frames)
+        }
     }
 
     let byteSize = UInt32(frames * 4)
     let abl = UnsafeMutableAudioBufferListPointer(ioData)
     if abl.count >= 2 {
         if let p = abl[0].mData?.assumingMemoryBound(to: Float.self) {
-            memcpy(p, ctx.mixLeft, frames * 4)
+            memcpy(p, bus.mixLeft, frames * 4)
             abl[0].mDataByteSize = byteSize
         }
         if let p = abl[1].mData?.assumingMemoryBound(to: Float.self) {
-            memcpy(p, ctx.mixRight, frames * 4)
+            memcpy(p, bus.mixRight, frames * 4)
             abl[1].mDataByteSize = byteSize
         }
     } else if abl.count == 1, let p = abl[0].mData?.assumingMemoryBound(to: Float.self) {
         let ch = max(Int(abl[0].mNumberChannels), 1)
         if ch == 1 {
-            for i in 0..<frames { p[i] = 0.5 * (ctx.mixLeft[i] + ctx.mixRight[i]) }
+            for i in 0..<frames { p[i] = 0.5 * (bus.mixLeft[i] + bus.mixRight[i]) }
         } else {
             for i in 0..<frames {
-                p[i * ch] = ctx.mixLeft[i]
-                p[i * ch + 1] = ctx.mixRight[i]
+                p[i * ch] = bus.mixLeft[i]
+                p[i * ch + 1] = bus.mixRight[i]
             }
         }
         abl[0].mDataByteSize = UInt32(frames * ch * 4)
@@ -800,4 +1149,5 @@ private func OSStatusCheck(_ status: OSStatus, _ label: String) throws {
 
 extension Notification.Name {
     static let omniLevelEngineGraphDidReset = Notification.Name("omniLevelEngineGraphDidReset")
+    static let omniLevelOutputDevicesDidChange = Notification.Name("omniLevelOutputDevicesDidChange")
 }

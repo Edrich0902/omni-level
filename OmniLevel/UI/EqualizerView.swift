@@ -6,6 +6,16 @@ struct EqualizerView: View {
     @ObservedObject var presetStore: PresetStore
     /// Used for live per-band input/output spectrum on the faders.
     var engine: AudioEngineController
+    /// Number of apps with a stored per-app EQ override.
+    var overrideAppCount: Int = 0
+    /// Optional title override (e.g. per-app editor).
+    var title: String = "Equalizer"
+    var subtitleOverride: String? = nil
+    /// Hide AutoEQ library / import when editing a per-app override.
+    var showsLibraryControls: Bool = true
+    /// When set, fader meters use these analyzers instead of the global mix bus.
+    var meterSpectrumInput: SpectrumAnalyzer? = nil
+    var meterSpectrum: SpectrumAnalyzer? = nil
 
     @State private var showImporter = false
     @State private var showAutoEQLibrary = false
@@ -81,10 +91,10 @@ struct EqualizerView: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Equalizer")
+                Text(title)
                     .font(.system(size: 15, weight: .bold, design: .rounded))
                     .foregroundStyle(OmniTheme.textPrimary)
-                Text("Live band meters · accent = out · soft = in · double‑click fader to zero")
+                Text(headerSubtitle)
                     .font(.system(size: 10, weight: .medium, design: .rounded))
                     .foregroundStyle(OmniTheme.textSecondary)
             }
@@ -107,6 +117,15 @@ struct EqualizerView: View {
                     )
                 }
         }
+    }
+
+    private var headerSubtitle: String {
+        if let subtitleOverride { return subtitleOverride }
+        if overrideAppCount > 0 {
+            let n = overrideAppCount
+            return "Global — overridden by \(n) app\(n == 1 ? "" : "s")"
+        }
+        return "Live band meters · accent = out · soft = in · double‑click fader to zero"
     }
 
     private var curveCanvas: some View {
@@ -213,8 +232,10 @@ struct EqualizerView: View {
         lastTick = date
         let freqs = EqualizerBand.standardFrequencies
         let rate = engine.sampleRate
-        let rawIn = engine.spectrumInput.levelsNearFrequencies(freqs, sampleRate: rate, dt: dt)
-        let rawOut = engine.spectrum.levelsNearFrequencies(freqs, sampleRate: rate, dt: dt)
+        let inputAnalyzer = meterSpectrumInput ?? engine.spectrumInput
+        let outputAnalyzer = meterSpectrum ?? engine.spectrum
+        let rawIn = inputAnalyzer.levelsNearFrequencies(freqs, sampleRate: rate, dt: dt)
+        let rawOut = outputAnalyzer.levelsNearFrequencies(freqs, sampleRate: rate, dt: dt)
         // Only publish @State when meters moved enough (avoids full 16-slider body).
         let nextIn = rawIn.map { CGFloat(dbToUnit($0)) }
         let nextOut = rawOut.map { CGFloat(dbToUnit($0)) }
@@ -268,14 +289,15 @@ struct EqualizerView: View {
                 .buttonStyle(.plain)
                 .help("Save current EQ as a custom preset")
 
-                Button {
-                    showAutoEQLibrary = true
-                } label: {
-                    GlassChip(title: "AutoEQ", systemImage: "headphones")
+                if showsLibraryControls {
+                    Button {
+                        showAutoEQLibrary = true
+                    } label: {
+                        GlassChip(title: "AutoEQ", systemImage: "headphones")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Browse the AutoEq library or import a ParametricEQ file")
                 }
-                .buttonStyle(.plain)
-                .help("Browse the AutoEq library or import a ParametricEQ file")
-
                 Button {
                     viewModel.applyPreset(EQPreset.builtIn[0])
                 } label: {

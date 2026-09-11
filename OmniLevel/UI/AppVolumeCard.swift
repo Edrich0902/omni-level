@@ -3,11 +3,15 @@ import SwiftUI
 
 struct AppVolumeCard: View {
     let node: AppAudioNode
+    let outputDevices: [AudioDeviceInfo]
     var onVolume: (Float) -> Void
     var onPan: (Float) -> Void
     var onMute: () -> Void
     var onSolo: () -> Void
     var onToggleTap: () -> Void
+    var onEditEQ: () -> Void
+    var onUseGlobalEQ: () -> Void
+    var onSelectOutputUID: (String?) -> Void
 
     private var panOffCenter: Bool { abs(node.pan) > 0.02 }
 
@@ -30,10 +34,21 @@ struct AppVolumeCard: View {
                 .frame(width: 36, height: 36)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(node.appName)
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .foregroundStyle(OmniTheme.textPrimary)
-                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(node.appName)
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(OmniTheme.textPrimary)
+                            .lineLimit(1)
+                        if node.hasEQOverride {
+                            Text("EQ")
+                                .font(.system(size: 9, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(OmniTheme.accent.opacity(0.75), in: Capsule())
+                                .help("Per-app EQ override active")
+                        }
+                    }
                     Text(node.isTapped ? "Through OmniLevel" : "Bypassing OmniLevel")
                         .font(.system(size: 10, weight: .medium, design: .rounded))
                         .foregroundStyle(node.isTapped ? OmniTheme.mint : OmniTheme.textSecondary)
@@ -128,11 +143,98 @@ struct AppVolumeCard: View {
                 .disabled(!panOffCenter)
                 .opacity(panOffCenter ? 1 : 0.5)
             }
+
+            // EQ + Output
+            HStack(spacing: 8) {
+                Menu {
+                    Button("Edit EQ…") { onEditEQ() }
+                    if node.hasEQOverride {
+                        Button("Use global EQ") { onUseGlobalEQ() }
+                    }
+                } label: {
+                    Label(
+                        node.hasEQOverride ? "Custom EQ" : "EQ",
+                        systemImage: "slider.vertical.3"
+                    )
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(OmniTheme.textPrimary.opacity(0.9))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(OmniTheme.fill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(
+                                node.hasEQOverride ? OmniTheme.accent.opacity(0.7) : OmniTheme.strokeSoft,
+                                lineWidth: 1
+                            )
+                    }
+                }
+                .menuStyle(.borderlessButton)
+
+                Menu {
+                    Button {
+                        onSelectOutputUID(nil)
+                    } label: {
+                        HStack {
+                            Text("System Default")
+                            if node.outputDeviceUID == nil { Image(systemName: "checkmark") }
+                        }
+                    }
+                    Divider()
+                    ForEach(outputDevices) { device in
+                        Button {
+                            onSelectOutputUID(device.uid)
+                        } label: {
+                            HStack {
+                                Text(device.name)
+                                if node.outputDeviceUID == device.uid {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "hifispeaker.fill")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text(outputLabel)
+                            .lineLimit(1)
+                    }
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(node.outputFallback ? OmniTheme.amber : OmniTheme.textPrimary.opacity(0.9))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(OmniTheme.fill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(
+                                node.outputFallback ? OmniTheme.amber.opacity(0.7) : OmniTheme.strokeSoft,
+                                lineWidth: 1
+                            )
+                    }
+                }
+                .menuStyle(.borderlessButton)
+                .help(node.outputFallback
+                      ? "Preferred output unavailable — using System Default"
+                      : "Route this app to a specific output")
+            }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassCard(cornerRadius: 14, elevated: false)
         .opacity(node.isMuted && !node.isSolo ? 0.72 : 1)
+    }
+
+    private var outputLabel: String {
+        if node.outputFallback {
+            return "Fallback · Default"
+        }
+        if let uid = node.outputDeviceUID,
+           let name = outputDevices.first(where: { $0.uid == uid })?.name {
+            return name
+        }
+        return "System Default"
     }
 
     private func controlButton(

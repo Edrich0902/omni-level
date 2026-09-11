@@ -55,7 +55,7 @@ struct NotchGeometry: Equatable, Sendable {
 
     /// Visual frame for the collapsed island — flush to the hardware notch, not taller.
     func collapsedFrame(wingExtension: CGFloat) -> CGRect {
-        let w = max(width + wingExtension, width + 64)
+        let w = max(width + wingExtension, width + 56)
         let h = height
         return CGRect(
             x: screenFrame.midX - w / 2,
@@ -65,19 +65,20 @@ struct NotchGeometry: Equatable, Sendable {
         )
     }
 
-    /// Invisible hover pad: slightly wider/taller than the visual, does not change the panel.
+    /// Hover pad around the drawn island only (not a large transparent slab).
     func collapsedHoverFrame(wingExtension: CGFloat) -> CGRect {
         collapsedFrame(wingExtension: wingExtension)
-            .insetBy(dx: -16, dy: -8)
-            .offsetBy(dx: 0, dy: -2)
+            .insetBy(dx: -8, dy: -4)
     }
 
     func expandedFrame(size: CGSize) -> CGRect {
-        CGRect(
+        // Never hang a large band under the menubar / into desktop windows.
+        let cappedHeight = min(size.height, height + 110)
+        return CGRect(
             x: screenFrame.midX - size.width / 2,
-            y: screenFrame.maxY - size.height,
+            y: screenFrame.maxY - cappedHeight,
             width: size.width,
-            height: size.height
+            height: cappedHeight
         )
     }
 }

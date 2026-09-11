@@ -1,5 +1,10 @@
 import SwiftUI
 
+@MainActor
+final class PerAppEQEditorHolder: ObservableObject {
+    @Published var editor: PerAppEQEditorState?
+}
+
 enum MainPane: String, CaseIterable, Identifiable {
     case equalizer = "Equalizer"
     case apps = "Apps"
@@ -24,6 +29,7 @@ struct ContentView: View {
     @StateObject private var launchAtLogin = LaunchAtLoginService()
     @State private var pane: MainPane = .equalizer
     @State private var appSearch = ""
+    @StateObject private var perAppEQEditorHolder = PerAppEQEditorHolder()
 
     private var engine: AudioEngineController { tapManager.engine }
 
@@ -68,7 +74,12 @@ struct ContentView: View {
                     switch pane {
                     case .equalizer:
                         ScrollView {
-                            EqualizerView(viewModel: equalizerVM, presetStore: presetStore, engine: engine)
+                            EqualizerView(
+                                viewModel: equalizerVM,
+                                presetStore: presetStore,
+                                engine: engine,
+                                overrideAppCount: tapManager.eqOverrideAppCount
+                            )
                                 .padding(.horizontal, 16)
                                 .padding(.bottom, 16)
                         }
@@ -89,7 +100,46 @@ struct ContentView: View {
         .onAppear {
             engine.refreshDevices()
             tapManager.refreshActiveAudioProcesses()
-            // Now Playing is owned by AppDelegate (shared with the notch overlay).
+            if tapManager.isOmniLevelBypassed, tapManager.lastError != nil {
+                tapManager.clearError()
+            }
+        }
+    }
+
+    private func openPerAppEQ(for node: AppAudioNode) {
+        // Toggle closed if re-tapping the same app.
+        if perAppEQEditorHolder.editor?.pid == node.id {
+            closePerAppEQ()
+            return
+        }
+
+        let entry = tapManager.eqOverrideEntry(for: node.id)
+        let seedGains = entry?.gainsdB ?? equalizerVM.bands.map(\.gaindB)
+        let seedQ = entry?.qFactors ?? equalizerVM.bands.map(\.qFactor)
+        let editor = PerAppEQEditorState(
+            pid: node.id,
+            appName: node.appName,
+            seedGains: seedGains,
+            seedQ: seedQ,
+            seedName: entry?.name ?? equalizerVM.selectedPresetName,
+            presetStore: presetStore,
+            sampleRate: engine.sampleRate,
+            onLiveChange: { [tapManager] gains, qs in
+                tapManager.setEQOverride(pid: node.id, gains: gains, qFactors: qs, name: "Custom")
+            }
+        )
+        tapManager.setEQOverride(pid: node.id, gains: seedGains, qFactors: seedQ, name: entry?.name)
+        engine.setSpectrumFocusPID(node.id)
+        withAnimation(.spring(response: 0.36, dampingFraction: 0.88)) {
+            perAppEQEditorHolder.editor = editor
+            pane = .apps
+        }
+    }
+
+    private func closePerAppEQ() {
+        engine.setSpectrumFocusPID(nil)
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
+            perAppEQEditorHolder.editor = nil
         }
     }
 
@@ -119,6 +169,13 @@ struct ContentView: View {
             Spacer(minLength: 8)
 
             Menu {
+                Toggle("Bypass OmniLevel", isOn: Binding(
+                    get: { tapManager.isOmniLevelBypassed },
+                    set: { tapManager.setOmniLevelBypassed($0) }
+                ))
+
+                Divider()
+
                 Toggle("Launch at Login", isOn: Binding(
                     get: { launchAtLogin.isEnabled },
                     set: { launchAtLogin.setEnabled($0) }
@@ -166,6 +223,7 @@ struct ContentView: View {
     }
 
     private var statusLabel: String {
+        if tapManager.isOmniLevelBypassed { return "Bypass" }
         switch engine.state {
         case .running: return "Active"
         case .stopped: return "Starting…"
@@ -174,6 +232,7 @@ struct ContentView: View {
     }
 
     private var statusColor: Color {
+        if tapManager.isOmniLevelBypassed { return OmniTheme.amber }
         switch engine.state {
         case .running: return OmniTheme.mint
         case .stopped: return OmniTheme.amber
@@ -182,7 +241,7 @@ struct ContentView: View {
     }
 
     private var statusSubtitle: String {
-        if case .error(let m) = engine.state { return m }
+        if case .error(let m) = engine.state, !tapManager.isOmniLevelBypassed { return m }
         if !tapManager.engineStatusMessage.isEmpty {
             return tapManager.engineStatusMessage
         }
@@ -215,6 +274,7 @@ struct ContentView: View {
         }
         .padding(12)
         .glassCard(cornerRadius: 16, elevated: false)
+        .opacity(tapManager.isOmniLevelBypassed ? 0.55 : 1)
     }
 
     private func devicePicker(
@@ -336,21 +396,65 @@ struct ContentView: View {
             } else if filteredApps.isEmpty {
                 emptyState(message: "No apps match “\(appSearch)”")
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(filteredApps) { node in
-                            AppVolumeCard(
-                                node: node,
-                                onVolume: { tapManager.setVolume(pid: node.id, volume: $0) },
-                                onPan: { tapManager.setPan(pid: node.id, pan: $0) },
-                                onMute: { tapManager.toggleMute(pid: node.id) },
-                                onSolo: { tapManager.toggleSolo(pid: node.id) },
-                                onToggleTap: { tapManager.toggleTap(for: node.id) }
-                            )
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 8) {
+                            ForEach(filteredApps) { node in
+                                AppVolumeCard(
+                                    node: node,
+                                    outputDevices: engine.devices.outputDevices,
+                                    onVolume: { tapManager.setVolume(pid: node.id, volume: $0) },
+                                    onPan: { tapManager.setPan(pid: node.id, pan: $0) },
+                                    onMute: { tapManager.toggleMute(pid: node.id) },
+                                    onSolo: { tapManager.toggleSolo(pid: node.id) },
+                                    onToggleTap: { tapManager.toggleTap(for: node.id) },
+                                    onEditEQ: { openPerAppEQ(for: node) },
+                                    onUseGlobalEQ: {
+                                        tapManager.clearEQOverride(pid: node.id)
+                                        if perAppEQEditorHolder.editor?.pid == node.id {
+                                            closePerAppEQ()
+                                        }
+                                    },
+                                    onSelectOutputUID: { tapManager.setOutputDeviceUID($0, for: node.id) }
+                                )
+                                .id(node.id)
+
+                                if let editor = perAppEQEditorHolder.editor, editor.pid == node.id {
+                                    PerAppEQEditorPanel(
+                                        editor: editor,
+                                        presetStore: presetStore,
+                                        engine: engine,
+                                        onDone: { closePerAppEQ() },
+                                        onUseGlobal: {
+                                            tapManager.clearEQOverride(pid: editor.pid)
+                                            closePerAppEQ()
+                                        }
+                                    )
+                                    .id("eq-\(node.id)")
+                                    .transition(
+                                        .asymmetric(
+                                            insertion: .move(edge: .top).combined(with: .opacity),
+                                            removal: .move(edge: .top).combined(with: .opacity)
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 16)
+                        .animation(
+                            .spring(response: 0.36, dampingFraction: 0.88),
+                            value: perAppEQEditorHolder.editor?.pid
+                        )
+                    }
+                    .onChange(of: perAppEQEditorHolder.editor?.pid) { _, pid in
+                        guard let pid else { return }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                            withAnimation(.spring(response: 0.36, dampingFraction: 0.88)) {
+                                proxy.scrollTo("eq-\(pid)", anchor: .top)
+                            }
                         }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 16)
                 }
             }
         }

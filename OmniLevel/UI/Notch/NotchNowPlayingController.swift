@@ -13,7 +13,6 @@ final class NotchNowPlayingController: NSObject {
     private var isExpanded = false
     private var collapseWorkItem: DispatchWorkItem?
     private var expandWorkItem: DispatchWorkItem?
-    /// Continuous mouse poll while the island is shown — tracking areas alone miss enters.
     private var hoverPollTimer: Timer?
     private var mouseMonitor: Any?
     private var localMouseMonitor: Any?
@@ -22,10 +21,8 @@ final class NotchNowPlayingController: NSObject {
     private var lastLayoutSignature = ""
     private var lastFrame: CGRect = .zero
     private let viewModel: NotchNowPlayingViewModel
-    /// Brief suppress after collapse so we don't bounce open.
     private var collapseCooldownUntil: Date = .distantPast
     private var pointerOutsideSince: Date?
-    /// How long the pointer has been in the collapsed hit zone (expand debounce).
     private var pointerInCollapsedSince: Date?
 
     init(service: NowPlayingService) {
@@ -70,15 +67,14 @@ final class NotchNowPlayingController: NSObject {
             backing: .buffered,
             defer: false
         )
-        panel.ignoresMouseEvents = false
-        // Ensure we receive events above the status strip.
+        // Collapsed: clicks pass through to menu bar; expand via pointer poll.
+        panel.ignoresMouseEvents = true
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 3)
 
         let tracking = NotchTrackingView(frame: NSRect(origin: .zero, size: frame.size))
         tracking.autoresizingMask = [.width, .height]
         tracking.wantsLayer = true
         tracking.layer?.backgroundColor = NSColor.clear.cgColor
-        // Backup — primary path is continuous global pointer polling.
         tracking.onMouseEntered = { [weak self] in self?.requestExpand(immediate: true) }
         tracking.onMouseExited = { [weak self] in self?.notePointerMayHaveLeft() }
 
@@ -112,10 +108,7 @@ final class NotchNowPlayingController: NSObject {
                 let visibilityChanged = self.applyVisibility(animated: true)
                 if signature != self.lastLayoutSignature || visibilityChanged {
                     self.lastLayoutSignature = signature
-                    self.reposition(animated: !self.isExpanded)
-                    if self.isExpanded {
-                        self.reposition(animated: true)
-                    }
+                    self.reposition(animated: true)
                 }
             }
             .store(in: &cancellables)
@@ -125,7 +118,7 @@ final class NotchNowPlayingController: NSObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
+            DispatchQueue.main.async {
                 self?.geometry = NotchGeometry.detect()
                 self?.viewModel.geometry = self?.geometry ?? NotchGeometry.detect()
                 self?.lastLayoutSignature = ""
@@ -138,8 +131,6 @@ final class NotchNowPlayingController: NSObject {
         players.map { "\($0.id):\($0.hasProgress ? 1 : 0)" }.joined(separator: "|")
             + (isExpanded ? "#e" : "#c")
     }
-
-    // MARK: - Visibility & layout
 
     @discardableResult
     private func applyVisibility(animated: Bool) -> Bool {
@@ -171,21 +162,17 @@ final class NotchNowPlayingController: NSObject {
 
     private func expandedContentSize() -> CGSize {
         let count = max(service.players.count, 1)
-        let width: CGFloat = count > 1 ? 430 : 390
-        var body: CGFloat = 8
-        for player in service.players {
-            body += player.hasProgress ? 108 : 78
-            body += 12
-        }
-        if service.players.isEmpty {
-            body += 90
-        }
-        let height = geometry.height + body + 8
+        let collapsedW = geometry.collapsedFrame(wingExtension: collapsedWingExtension()).width
+        // Keep width close to collapsed so AppKit doesn't expand left/right from center.
+        let width = max(collapsedW, count > 1 ? 340 : 300)
+        let row: CGFloat = 56
+        let body = CGFloat(count) * row + CGFloat(max(count - 1, 0)) * 6 + 12
+        let height = min(geometry.height + body, geometry.height + 110)
         return CGSize(width: width, height: height)
     }
 
     private func collapsedWingExtension() -> CGFloat {
-        service.players.count > 1 ? 88 : 76
+        service.players.count > 1 ? 72 : 64
     }
 
     private func targetFrame(expanded: Bool) -> CGRect {
@@ -193,6 +180,10 @@ final class NotchNowPlayingController: NSObject {
             return geometry.expandedFrame(size: expandedContentSize())
         }
         return geometry.collapsedFrame(wingExtension: collapsedWingExtension())
+    }
+
+    private func updateMousePassthrough() {
+        panel?.ignoresMouseEvents = !isExpanded
     }
 
     private func reposition(animated: Bool) {
@@ -204,41 +195,46 @@ final class NotchNowPlayingController: NSObject {
            abs(frame.minY - lastFrame.minY) < 0.5,
            abs(frame.width - lastFrame.width) < 0.5,
            abs(frame.height - lastFrame.height) < 0.5 {
+            updateMousePassthrough()
             return
         }
-        lastFrame = frame
-        if animated {
+
+        updateMousePassthrough()
+
+        // Slide down/up from the notch: snap horizontal size, then animate only height/y.
+        if animated, panel.isVisible, lastFrame.width > 1 {
+            var widthLocked = lastFrame
+            widthLocked.size.width = frame.width
+            widthLocked.origin.x = frame.origin.x
+            // Keep top edge glued to the screen top.
+            widthLocked.origin.y = geometry.screenFrame.maxY - widthLocked.height
+            panel.setFrame(widthLocked, display: false)
+
+            lastFrame = frame
             NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = isExpanded ? 0.26 : 0.2
-                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.25, 1.0)
+                ctx.duration = isExpanded ? 0.22 : 0.14
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 ctx.allowsImplicitAnimation = true
                 panel.animator().setFrame(frame, display: true)
             } completionHandler: { [weak self] in
-                Task { @MainActor in
-                    self?.trackingView?.refreshTrackingAreas()
-                    // After expand animation, re-check pointer still inside.
-                    self?.evaluatePointer()
-                }
+                self?.trackingView?.refreshTrackingAreas()
+                self?.evaluatePointer()
             }
         } else {
+            lastFrame = frame
             panel.setFrame(frame, display: true)
             trackingView?.refreshTrackingAreas()
         }
     }
 
-    // MARK: - Hit testing
-
-    /// Hover uses a pad around the visual frame — panel itself stays menubar-height.
     private func collapsedHitFrame() -> CGRect {
         geometry.collapsedHoverFrame(wingExtension: collapsedWingExtension())
     }
 
     private func expandedHitFrame() -> CGRect {
         guard let panel else { return targetFrame(expanded: true) }
-        return panel.frame.insetBy(dx: -10, dy: -12)
+        return panel.frame.insetBy(dx: -6, dy: -8)
     }
-
-    // MARK: - Expand / collapse
 
     private func requestExpand(immediate: Bool) {
         guard Date() >= collapseCooldownUntil else { return }
@@ -250,12 +246,11 @@ final class NotchNowPlayingController: NSObject {
             expandNow()
             return
         }
-        // Slight dwell so a fast menubar pass doesn't flash the tray open.
         let work = DispatchWorkItem { [weak self] in
             self?.expandNow()
         }
         expandWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.07, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work)
     }
 
     private func expandNow() {
@@ -269,14 +264,14 @@ final class NotchNowPlayingController: NSObject {
         isExpanded = true
         viewModel.isExpanded = true
         lastLayoutSignature = layoutSignature(for: service.players)
-        lastFrame = .zero
+        // Enable clicks before frame settles so transport is interactive ASAP.
+        updateMousePassthrough()
         reposition(animated: true)
-        // Do NOT makeKey — freezes popover / event delivery.
     }
 
     private func notePointerMayHaveLeft() {
         if isExpanded {
-            scheduleCollapse(delay: 0.2)
+            scheduleCollapse(delay: 0.12)
         } else {
             expandWorkItem?.cancel()
             pointerInCollapsedSince = nil
@@ -305,10 +300,10 @@ final class NotchNowPlayingController: NSObject {
         }
         if pointerOutsideSince == nil {
             pointerOutsideSince = Date()
-            scheduleCollapse(delay: 0.22)
+            scheduleCollapse(delay: 0.12)
             return
         }
-        if Date().timeIntervalSince(pointerOutsideSince!) >= 0.18 {
+        if Date().timeIntervalSince(pointerOutsideSince!) >= 0.1 {
             forceCollapse(animated: true)
         }
     }
@@ -321,22 +316,16 @@ final class NotchNowPlayingController: NSObject {
         guard isExpanded else { return }
         isExpanded = false
         viewModel.isExpanded = false
-        collapseCooldownUntil = Date().addingTimeInterval(0.18)
+        collapseCooldownUntil = Date().addingTimeInterval(0.14)
         lastLayoutSignature = layoutSignature(for: service.players)
-        lastFrame = .zero
         reposition(animated: animated)
     }
-
-    // MARK: - Continuous pointer tracking
 
     private func startPointerTracking() {
         guard hoverPollTimer == nil else { return }
 
-        // ~60 Hz is enough to feel instant without burning CPU.
-        hoverPollTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.evaluatePointer()
-            }
+        hoverPollTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 25.0, repeats: true) { [weak self] _ in
+            DispatchQueue.main.async { self?.evaluatePointer() }
         }
         if let hoverPollTimer {
             RunLoop.main.add(hoverPollTimer, forMode: .common)
@@ -344,14 +333,14 @@ final class NotchNowPlayingController: NSObject {
 
         if mouseMonitor == nil {
             mouseMonitor = NSEvent.addGlobalMonitorForEvents(
-                matching: [.mouseMoved, .leftMouseDragged, .leftMouseDown, .rightMouseDown]
+                matching: [.mouseMoved, .leftMouseDragged]
             ) { [weak self] _ in
                 DispatchQueue.main.async { self?.evaluatePointer() }
             }
         }
         if localMouseMonitor == nil {
             localMouseMonitor = NSEvent.addLocalMonitorForEvents(
-                matching: [.mouseMoved, .leftMouseDragged, .leftMouseDown, .rightMouseDown]
+                matching: [.mouseMoved, .leftMouseDragged]
             ) { [weak self] event in
                 DispatchQueue.main.async { self?.evaluatePointer() }
                 return event
@@ -378,7 +367,6 @@ final class NotchNowPlayingController: NSObject {
         pointerInCollapsedSince = nil
     }
 
-    /// Central hover state machine — works even when the panel never sees Cocoa enter/exit.
     private func evaluatePointer() {
         guard panel?.isVisible == true, !service.players.isEmpty else { return }
         let mouse = NSEvent.mouseLocation
@@ -393,13 +381,12 @@ final class NotchNowPlayingController: NSObject {
             return
         }
 
-        // Collapsed: dwell briefly then expand.
         if collapsedHitFrame().contains(mouse) {
             if Date() < collapseCooldownUntil { return }
             if pointerInCollapsedSince == nil {
                 pointerInCollapsedSince = Date()
             }
-            if Date().timeIntervalSince(pointerInCollapsedSince!) >= 0.05 {
+            if Date().timeIntervalSince(pointerInCollapsedSince!) >= 0.04 {
                 requestExpand(immediate: true)
             } else {
                 requestExpand(immediate: false)
@@ -420,7 +407,6 @@ final class NotchTrackingView: NSView {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach { removeTrackingArea($0) }
-        // No assumeInside — that suppressed enter events after expand/collapse.
         addTrackingArea(
             NSTrackingArea(
                 rect: bounds,
@@ -445,9 +431,9 @@ final class NotchTrackingView: NSView {
 
     override var isFlipped: Bool { true }
 
-    /// Entire panel frame is hoverable even over empty SwiftUI regions.
+    /// Forward to SwiftUI hosting view so transport buttons receive clicks.
     override func hitTest(_ point: NSPoint) -> NSView? {
-        bounds.contains(point) ? self : nil
+        super.hitTest(point)
     }
 }
 

@@ -8,8 +8,20 @@ import os
 /// - **Per-app** stereo mixdown taps (one process each) so volume / balance can be applied
 /// - Private **tap-only** aggregates used as capture devices (output stays on the real speakers)
 public final class ProcessTapIO: @unchecked Sendable {
+    /// One tap keyed by the UI/mixer PID, covering a cluster of Core Audio processes.
+    public struct TapCluster: Hashable, Sendable {
+        public let keyPID: pid_t
+        public let audioPIDs: [pid_t]
+
+        public init(keyPID: pid_t, audioPIDs: [pid_t]) {
+            self.keyPID = keyPID
+            self.audioPIDs = audioPIDs
+        }
+    }
+
     public struct AppTapHandle: Sendable {
         public let pid: pid_t
+        public let audioPIDs: [pid_t]
         public let tapID: AudioObjectID
         public let aggregateDeviceID: AudioObjectID
         public let tapUID: String
@@ -40,6 +52,7 @@ public final class ProcessTapIO: @unchecked Sendable {
 
     private let lock = OSAllocatedUnfairLock()
     private var appTaps: [AppTapHandle] = []
+    private let log = Logger(subsystem: "com.omnilevel.app", category: "processTap")
 
     public init() {}
 
@@ -55,42 +68,73 @@ public final class ProcessTapIO: @unchecked Sendable {
     @available(macOS 14.2, *)
     @discardableResult
     public func startAppTaps(pids: [pid_t]) throws -> [AppTapHandle] {
-        try syncAppTaps(pids: pids)
+        try syncAppTaps(clusters: pids.map { TapCluster(keyPID: $0, audioPIDs: [$0]) })
     }
 
-    /// Differential: destroy taps for removed PIDs, create only for new ones.
+    @available(macOS 14.2, *)
+    @discardableResult
+    public func startAppTaps(clusters: [TapCluster]) throws -> [AppTapHandle] {
+        try syncAppTaps(clusters: clusters)
+    }
+
+    /// Differential: destroy taps for removed keys, recreate when cluster membership changes.
     /// Surviving taps stay live so audio through those apps is uninterrupted.
     @available(macOS 14.2, *)
     @discardableResult
     public func syncAppTaps(pids: [pid_t]) throws -> [AppTapHandle] {
+        try syncAppTaps(clusters: pids.map { TapCluster(keyPID: $0, audioPIDs: [$0]) })
+    }
+
+    @available(macOS 14.2, *)
+    @discardableResult
+    public func syncAppTaps(clusters: [TapCluster]) throws -> [AppTapHandle] {
         let ownPID = ProcessInfo.processInfo.processIdentifier
-        let desired = Set(pids.filter { $0 != ownPID })
+        let desiredClusters = clusters
+            .filter { $0.keyPID != ownPID }
+            .map { cluster in
+                TapCluster(
+                    keyPID: cluster.keyPID,
+                    audioPIDs: cluster.audioPIDs.filter { $0 != ownPID }
+                )
+            }
+        let desiredKeys = Set(desiredClusters.map(\.keyPID))
+        let desiredByKey = Dictionary(uniqueKeysWithValues: desiredClusters.map { ($0.keyPID, $0) })
 
         let existing = lock.withLock { appTaps }
         let existingByPID = Dictionary(uniqueKeysWithValues: existing.map { ($0.pid, $0) })
         let currentPIDs = Set(existingByPID.keys)
 
-        let toRemove = currentPIDs.subtracting(desired)
-        let toAdd = desired.subtracting(currentPIDs)
-
-        // Destroy removed taps first (releases mute-when-tapped for those apps only).
+        let toRemove = currentPIDs.subtracting(desiredKeys)
         for pid in toRemove {
             if let handle = existingByPID[pid] {
                 destroy(handle: handle)
             }
         }
 
-        var kept = existing.filter { desired.contains($0.pid) }
-        for pid in toAdd {
-            if let handle = try createAppTap(pid: pid) {
+        var kept: [AppTapHandle] = []
+        for key in desiredKeys.sorted() {
+            guard let cluster = desiredByKey[key] else { continue }
+            let existingHandle = existingByPID[key]
+            let existingSet = Set(existingHandle?.audioPIDs ?? [])
+            let desiredSet = Set(cluster.audioPIDs)
+
+            if let existingHandle, existingSet == desiredSet {
+                kept.append(existingHandle)
+                continue
+            }
+
+            // Membership changed or new — recreate.
+            if let existingHandle {
+                destroy(handle: existingHandle)
+            }
+            if let handle = try createAppTap(cluster: cluster) {
                 kept.append(handle)
             }
         }
 
-        // Stable order by PID for deterministic mix.
         kept.sort { $0.pid < $1.pid }
 
-        if kept.isEmpty, !desired.isEmpty {
+        if kept.isEmpty, !desiredKeys.isEmpty {
             throw TapError.noProcessTapsCreated
         }
 
@@ -120,17 +164,30 @@ public final class ProcessTapIO: @unchecked Sendable {
     }
 
     @available(macOS 14.2, *)
-    private func createAppTap(pid: pid_t) throws -> AppTapHandle? {
-        guard let processObject = Self.audioProcessObjectID(for: pid) else { return nil }
+    private func createAppTap(cluster: TapCluster) throws -> AppTapHandle? {
+        let processObjects: [AudioObjectID] = cluster.audioPIDs.compactMap { Self.audioProcessObjectID(for: $0) }
+        guard !processObjects.isEmpty else { return nil }
 
-        let description = CATapDescription(stereoMixdownOfProcesses: [processObject])
-        description.name = "OmniLevel App \(pid)"
+        // Keep PID order aligned with successfully resolved objects.
+        var resolvedPIDs: [pid_t] = []
+        for pid in cluster.audioPIDs {
+            if Self.audioProcessObjectID(for: pid) != nil {
+                resolvedPIDs.append(pid)
+            }
+        }
+        let description = CATapDescription(stereoMixdownOfProcesses: processObjects)
+        description.name = "OmniLevel App \(cluster.keyPID)"
         description.isPrivate = true
         description.muteBehavior = .mutedWhenTapped
 
         var tapID = AudioObjectID(kAudioObjectUnknown)
         let status = AudioHardwareCreateProcessTap(description, &tapID)
-        guard status == noErr, tapID != kAudioObjectUnknown else { return nil }
+        guard status == noErr, tapID != kAudioObjectUnknown else {
+            log.error(
+                "createAppTap failed key=\(cluster.keyPID) pids=\(resolvedPIDs.map(String.init).joined(separator: ","), privacy: .public) status=\(status)"
+            )
+            return nil
+        }
 
         guard let uid = Self.tapUID(for: tapID) else {
             AudioHardwareDestroyProcessTap(tapID)
@@ -138,9 +195,10 @@ public final class ProcessTapIO: @unchecked Sendable {
         }
 
         do {
-            let aggregateID = try Self.createTapOnlyAggregate(tapUID: uid, label: "App\(pid)")
+            let aggregateID = try Self.createTapOnlyAggregate(tapUID: uid, label: "App\(cluster.keyPID)")
             return AppTapHandle(
-                pid: pid,
+                pid: cluster.keyPID,
+                audioPIDs: resolvedPIDs,
                 tapID: tapID,
                 aggregateDeviceID: aggregateID,
                 tapUID: uid
@@ -178,6 +236,69 @@ public final class ProcessTapIO: @unchecked Sendable {
             return processObject
         }
         return findProcessObjectByEnumerating(pid: pid)
+    }
+
+    /// All Core Audio–registered processes whose bundle ID contains any token (case-insensitive).
+    /// Arc helpers often appear here while missing from NSWorkspace.
+    public static func audioProcessPIDs(bundleContains tokens: [String]) -> [pid_t] {
+        let needles = tokens
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+        guard !needles.isEmpty else { return [] }
+
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyProcessObjectList,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        var dataSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            0,
+            nil,
+            &dataSize
+        ) == noErr, dataSize > 0 else { return [] }
+
+        let count = Int(dataSize) / MemoryLayout<AudioObjectID>.size
+        var processes = [AudioObjectID](repeating: 0, count: count)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            0,
+            nil,
+            &dataSize,
+            &processes
+        ) == noErr else { return [] }
+
+        var pids: [pid_t] = []
+        for processID in processes {
+            var processPID: pid_t = 0
+            var pidSize = UInt32(MemoryLayout<pid_t>.size)
+            var pidAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioProcessPropertyPID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            guard AudioObjectGetPropertyData(processID, &pidAddress, 0, nil, &pidSize, &processPID) == noErr,
+                  processPID > 0 else { continue }
+
+            var bundleRef: CFString?
+            var bundleSize = UInt32(MemoryLayout<CFString?>.size)
+            var bundleAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioProcessPropertyBundleID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            let bundleStatus = withUnsafeMutablePointer(to: &bundleRef) { ptr in
+                AudioObjectGetPropertyData(processID, &bundleAddress, 0, nil, &bundleSize, ptr)
+            }
+            let bundle = (bundleStatus == noErr ? bundleRef as String? : nil)?.lowercased() ?? ""
+            guard needles.contains(where: { bundle.contains($0) }) else { continue }
+            pids.append(processPID)
+        }
+        return Array(Set(pids)).sorted()
     }
 
     private static func findProcessObjectByEnumerating(pid: pid_t) -> AudioObjectID? {

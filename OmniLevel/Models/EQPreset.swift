@@ -79,6 +79,8 @@ public struct EQSessionState: Codable, Equatable, Sendable {
     public var qFactors: [Float]?
     public var autoPreAmpEnabled: Bool
     public var targetCurveGains: [Float]?
+    /// Wall-clock save time (seconds since reference date) for UD vs file freshness.
+    public var savedAt: TimeInterval?
 
     public init(
         name: String,
@@ -86,7 +88,8 @@ public struct EQSessionState: Codable, Equatable, Sendable {
         gainsdB: [Float],
         qFactors: [Float]? = nil,
         autoPreAmpEnabled: Bool = false,
-        targetCurveGains: [Float]? = nil
+        targetCurveGains: [Float]? = nil,
+        savedAt: TimeInterval? = nil
     ) {
         self.name = name
         self.presetID = presetID
@@ -94,10 +97,11 @@ public struct EQSessionState: Codable, Equatable, Sendable {
         self.qFactors = qFactors
         self.autoPreAmpEnabled = autoPreAmpEnabled
         self.targetCurveGains = targetCurveGains
+        self.savedAt = savedAt
     }
 
     private enum CodingKeys: String, CodingKey {
-        case name, presetID, gainsdB, qFactors, autoPreAmpEnabled, targetCurveGains
+        case name, presetID, gainsdB, qFactors, autoPreAmpEnabled, targetCurveGains, savedAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -109,5 +113,6 @@ public struct EQSessionState: Codable, Equatable, Sendable {
         // Missing key (and legacy accidental on) → default OFF.
         autoPreAmpEnabled = try c.decodeIfPresent(Bool.self, forKey: .autoPreAmpEnabled) ?? false
         targetCurveGains = try c.decodeIfPresent([Float].self, forKey: .targetCurveGains)
+        savedAt = try c.decodeIfPresent(TimeInterval.self, forKey: .savedAt)
     }
 }

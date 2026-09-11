@@ -50,7 +50,7 @@ public final class AutoPreAmpLimiter: @unchecked Sendable {
         let slew = slewPerSample
         lock.unlock()
 
-        // Fully skip when unity — no arithmetic, no nonlinear path.
+        // Fully transparent when pre-amp is off — no soft-clip coloring.
         if abs(target - 1) < 1e-6, abs(gain - 1) < 1e-5 {
             lock.lock()
             currentLinear = 1
@@ -88,18 +88,18 @@ public final class AutoPreAmpLimiter: @unchecked Sendable {
     }
 
     @inline(__always)
-    private func applyGainSafely(_ x: Float, gain: Float) -> Float {
-        let y = x * gain
-        let absY = abs(y)
-        // Transparent under the safety threshold.
-        if absY <= safetyStart {
-            return y
-        }
-        // Soft asymptotic approach to ceiling — only for rare overs.
-        let sign: Float = y >= 0 ? 1 : -1
-        let over = absY - safetyStart
+    private func softCeiling(_ x: Float) -> Float {
+        let absX = abs(x)
+        if absX <= safetyStart { return x }
+        let sign: Float = x >= 0 ? 1 : -1
+        let over = absX - safetyStart
         let room = max(ceiling - safetyStart, 0.001)
         let limited = safetyStart + room * tanh(over / room)
         return sign * min(limited, ceiling)
+    }
+
+    @inline(__always)
+    private func applyGainSafely(_ x: Float, gain: Float) -> Float {
+        softCeiling(x * gain)
     }
 }

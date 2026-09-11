@@ -19,6 +19,9 @@ public final class EqualizerViewModel: ObservableObject {
     private var onChange: (() -> Void)?
     private let log = Logger(subsystem: "com.omnilevel.app", category: "eq")
 
+    /// When false, band edits do not write the global last-session (used for per-app EQ editors).
+    public var persistsGlobalSession = true
+
     private var cachedCurve: [(frequency: Float, magnitudedB: Float)] = []
     private var cachedCurveSignature: UInt64 = 0
     private var cachedCurveCount: Int = 0
@@ -28,11 +31,13 @@ public final class EqualizerViewModel: ObservableObject {
         dsp: EqualizerDSP,
         limiter: AutoPreAmpLimiter,
         presetStore: PresetStore,
+        persistsGlobalSession: Bool = true,
         onChange: (() -> Void)? = nil
     ) {
         self.dsp = dsp
         self.limiter = limiter
         self.presetStore = presetStore
+        self.persistsGlobalSession = persistsGlobalSession
         self.onChange = onChange
         self.bands = dsp.snapshotBands()
         // Always start with auto pre-amp off; restore may re-enable explicitly.
@@ -42,22 +47,41 @@ public final class EqualizerViewModel: ObservableObject {
         limiter.setPreAmpdB(0)
     }
 
-    /// Apply last session, or the last user-saved custom preset, or leave Flat + auto off.
+    /// Whether restore applied a real session (or selected preset) vs cold Flat defaults.
+    public private(set) var didRestoreRealSession = false
+
+    /// Apply last session, or selectedPresetID, or last user preset, or leave Flat + auto off.
     public func restoreLastSessionIfAvailable() {
-        if let session = presetStore.loadSession(), !Self.isPlaceholderSession(session) {
-            log.info("restoring session “\(session.name, privacy: .public)”")
+        didRestoreRealSession = false
+
+        if let session = presetStore.loadSession() {
+            let peak = session.gainsdB.map { abs($0) }.max() ?? 0
+            log.info(
+                "restoring session “\(session.name, privacy: .public)” id=\(session.presetID?.uuidString ?? "nil", privacy: .public) peak=\(peak)"
+            )
             restoreSession(session)
+            didRestoreRealSession = true
             return
         }
 
-        // Recover saved custom presets when session was never written or only a cold-start Flat stub.
+        // Prefer last selected preset (built-in or user) over “last user preset only”.
+        if let id = presetStore.selectedPresetID,
+           let preset = presetStore.preset(id: id) {
+            log.info("no session — restoring selectedPresetID “\(preset.name, privacy: .public)”")
+            applyPreset(preset, persist: true, forceAutoPreAmp: false)
+            didRestoreRealSession = true
+            return
+        }
+
         if let lastUser = presetStore.presets.last(where: { !$0.isBuiltIn }) {
-            log.info("no real session — applying last user preset “\(lastUser.name, privacy: .public)”")
+            log.info("no session/selection — applying last user preset “\(lastUser.name, privacy: .public)”")
             applyPreset(lastUser, persist: true, forceAutoPreAmp: false)
+            didRestoreRealSession = true
             return
         }
 
         // Cold start: Flat + auto pre-amp off — do not write a fake “preference”.
+        log.info("cold start — Flat defaults (not persisting)")
         dsp.setAutoPreAmpEnabled(false)
         autoPreAmpEnabled = false
         autoPreAmpdB = 0
@@ -65,13 +89,6 @@ public final class EqualizerViewModel: ObservableObject {
         selectedPresetName = "Flat"
         selectedPresetID = EQPreset.builtIn.first?.id
         onChange?()
-    }
-
-    /// Early builds wrote Flat + auto-on when nothing had been chosen yet — ignore those stubs.
-    private static func isPlaceholderSession(_ session: EQSessionState) -> Bool {
-        session.name == "Flat"
-            && session.gainsdB.allSatisfy { abs($0) < 0.01 }
-            && session.autoPreAmpEnabled
     }
 
     public func restoreSession(_ session: EQSessionState) {
@@ -178,7 +195,7 @@ public final class EqualizerViewModel: ObservableObject {
     }
 
     private func persistSession() {
-        guard !isRestoring else { return }
+        guard !isRestoring, persistsGlobalSession else { return }
         let gains = bands.map(\.gaindB)
         guard gains.count == EqualizerDSP.bandCount else { return }
         presetStore.saveSession(
@@ -188,7 +205,8 @@ public final class EqualizerViewModel: ObservableObject {
                 gainsdB: gains,
                 qFactors: bands.map(\.qFactor),
                 autoPreAmpEnabled: autoPreAmpEnabled,
-                targetCurveGains: targetCurveGains
+                targetCurveGains: targetCurveGains,
+                savedAt: Date().timeIntervalSinceReferenceDate
             )
         )
     }

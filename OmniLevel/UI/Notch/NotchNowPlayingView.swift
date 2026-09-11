@@ -12,11 +12,9 @@ struct NotchNowPlayingRootView: View {
         self._service = ObservedObject(wrappedValue: viewModel.service)
     }
 
-    /// Match hardware notch corners more closely when closed; slightly larger when open.
-    private var topRadius: CGFloat { viewModel.isExpanded ? 10 : 3 }
+    private var topRadius: CGFloat { viewModel.isExpanded ? 8 : 3 }
     private var bottomRadius: CGFloat {
-        // Collapsed: keep radius within the menubar strip so the blob doesn't hang into windows.
-        if viewModel.isExpanded { return 22 }
+        if viewModel.isExpanded { return 16 }
         return min(10, max(6, viewModel.geometry.height * 0.28))
     }
 
@@ -24,27 +22,25 @@ struct NotchNowPlayingRootView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            // Base is absolute black so the island merges with the hardware notch.
             NotchShape(topCornerRadius: topRadius, bottomCornerRadius: bottomRadius)
                 .fill(pureBlack)
 
             VStack(spacing: 0) {
-                // Band that covers the physical cutout height exactly.
                 Color.clear
                     .frame(height: viewModel.geometry.height)
                     .overlay {
                         if !viewModel.isExpanded {
                             collapsedStrip
-                                .padding(.horizontal, 10)
                         }
                     }
 
                 if viewModel.isExpanded {
                     expandedTray
-                        .padding(.horizontal, 14)
-                        .padding(.top, 4)
-                        .padding(.bottom, 12)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
+                        .padding(.horizontal, 10)
+                        .padding(.top, 2)
+                        .padding(.bottom, 8)
+                        // Opacity only — panel frame animation is owned by AppKit.
+                        .transition(.opacity)
                 }
             }
         }
@@ -53,42 +49,43 @@ struct NotchNowPlayingRootView: View {
         .background(Color.clear)
         .preferredColorScheme(.dark)
         .compositingGroup()
-        .animation(.spring(response: 0.38, dampingFraction: 0.92), value: viewModel.isExpanded)
-        .animation(.easeOut(duration: 0.2), value: service.players.map(\.id))
+        .animation(.easeOut(duration: 0.12), value: viewModel.isExpanded)
+        .animation(.easeOut(duration: 0.15), value: service.players.map(\.id))
     }
 
     // MARK: - Collapsed wings
 
     private var collapsedStrip: some View {
         HStack(spacing: 0) {
-            HStack(spacing: 5) {
+            HStack(spacing: 6) {
                 if let first = service.players.first {
-                    miniArt(first, size: 15)
+                    miniArt(first, size: 16)
                     if first.isPlaying {
                         LiveDot(color: tint(for: first))
                     }
                 }
-                Spacer(minLength: 0)
+                Spacer(minLength: 4)
             }
             .frame(maxWidth: .infinity)
 
             Color.clear
                 .frame(width: max(viewModel.geometry.width - 4, 90))
 
-            HStack(spacing: 5) {
-                Spacer(minLength: 0)
+            HStack(spacing: 6) {
+                Spacer(minLength: 4)
                 if service.players.count > 1, let second = service.players.last {
                     if second.isPlaying {
                         LiveDot(color: tint(for: second))
                     }
-                    miniArt(second, size: 15)
+                    miniArt(second, size: 16)
                 } else if let first = service.players.first {
-                    miniAppIcon(first, size: 13)
+                    miniAppIcon(first, size: 14)
                 }
             }
             .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 12)
     }
 
     private func miniArt(_ item: NowPlayingItem, size: CGFloat) -> some View {
@@ -129,10 +126,10 @@ struct NotchNowPlayingRootView: View {
         .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
     }
 
-    // MARK: - Expanded tray
+    // MARK: - Expanded tray (compact single row)
 
     private var expandedTray: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 6) {
             ForEach(service.players) { item in
                 expandedPlayer(item)
             }
@@ -143,89 +140,33 @@ struct NotchNowPlayingRootView: View {
     private func expandedPlayer(_ item: NowPlayingItem) -> some View {
         let accent = tint(for: item)
 
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 12) {
-                artwork(item, size: 48, accent: accent)
+        return HStack(alignment: .center, spacing: 10) {
+            artwork(item, size: 36, accent: accent)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 5) {
-                        if let icon = item.appIcon {
-                            Image(nsImage: icon)
-                                .resizable()
-                                .interpolation(.high)
-                                .frame(width: 11, height: 11)
-                                .clipShape(RoundedRectangle(cornerRadius: 2.5, style: .continuous))
-                        }
-                        Text(item.appName)
-                            .font(.system(size: 9, weight: .bold, design: .rounded))
-                            .tracking(0.3)
-                            .foregroundStyle(accent.opacity(0.95))
-                            .textCase(.uppercase)
-                        if item.isPlaying {
-                            Image(systemName: "waveform")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(accent.opacity(0.85))
-                                .symbolEffect(.variableColor.iterative, isActive: true)
-                        }
-                    }
-
-                    Text(item.title)
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.95))
-                        .lineLimit(1)
-
-                    if !item.artist.isEmpty {
-                        Text(item.artist)
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.45))
-                            .lineLimit(1)
-                    }
-                }
-
-                Spacer(minLength: 8)
-
-                transport(item, accent: accent)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(item.title)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.95))
+                    .lineLimit(1)
+                Text(item.artist.isEmpty ? item.appName : item.artist)
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.45))
+                    .lineLimit(1)
             }
 
-            if item.hasProgress {
-                NowPlayingSeekBar(item: item, accent: accent) { seconds in
-                    service.seek(item, to: seconds)
-                }
-            }
+            Spacer(minLength: 4)
+
+            transport(item, accent: accent)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 11)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
         .background {
-            ZStack {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.white.opacity(0.04))
-                // Soft source wash (Spotify green / system cyan) — stays black-dominant
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                accent.opacity(0.10),
-                                accent.opacity(0.02),
-                                Color.clear
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(
-                        LinearGradient(
-                            colors: [
-                                accent.opacity(0.45),
-                                accent.opacity(0.12),
-                                Color.white.opacity(0.08)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1
-                    )
-            }
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(accent.opacity(0.25), lineWidth: 1)
+                }
         }
     }
 
@@ -240,27 +181,22 @@ struct NotchNowPlayingRootView: View {
                 ZStack {
                     accent.opacity(0.12)
                     Image(systemName: item.source == .spotify ? "music.note.list" : "globe")
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(accent.opacity(0.75))
                 }
             }
         }
         .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .strokeBorder(accent.opacity(0.28), lineWidth: 1)
-        }
-        .shadow(color: accent.opacity(item.isPlaying ? 0.3 : 0.12), radius: item.isPlaying ? 8 : 4, y: 1)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private func transport(_ item: NowPlayingItem, accent: Color) -> some View {
-        HStack(spacing: 6) {
-            iconButton("backward.fill", size: 11, accent: accent) { service.previous(item) }
-            iconButton(item.isPlaying ? "pause.fill" : "play.fill", size: 12, filled: true, accent: accent) {
+        HStack(spacing: 4) {
+            iconButton("backward.fill", size: 9, accent: accent) { service.previous(item) }
+            iconButton(item.isPlaying ? "pause.fill" : "play.fill", size: 10, filled: true, accent: accent) {
                 service.togglePlayPause(item)
             }
-            iconButton("forward.fill", size: 11, accent: accent) { service.next(item) }
+            iconButton("forward.fill", size: 9, accent: accent) { service.next(item) }
         }
     }
 
@@ -275,15 +211,12 @@ struct NotchNowPlayingRootView: View {
             Image(systemName: systemName)
                 .font(.system(size: size, weight: .semibold))
                 .foregroundStyle(filled ? pureBlack : Color.white.opacity(0.9))
-                .frame(width: filled ? 32 : 28, height: filled ? 32 : 28)
+                .frame(width: filled ? 26 : 22, height: filled ? 26 : 22)
                 .background {
                     if filled {
-                        Circle()
-                            .fill(Color.white)
-                            .shadow(color: accent.opacity(0.35), radius: 6, y: 1)
+                        Circle().fill(Color.white)
                     } else {
-                        Circle()
-                            .fill(Color.white.opacity(0.08))
+                        Circle().fill(Color.white.opacity(0.08))
                     }
                 }
         }
@@ -306,7 +239,7 @@ private struct LiveDot: View {
     var body: some View {
         Circle()
             .fill(color)
-            .frame(width: 5, height: 5)
-            .shadow(color: color.opacity(0.8), radius: 3)
+            .frame(width: 4, height: 4)
+            .shadow(color: color.opacity(0.8), radius: 2)
     }
 }
