@@ -5,7 +5,6 @@ Revisit after the mixer persistence / meters / hide-silent / permissions / READM
 - Global hotkeys (mute / master bypass / notch)
 - Notch enable/disable in the overflow menu
 - Editable Q in the EQ UI
-- Favorites / pin order / app groups
 - Virtual-device / broader capture for untappable apps
 - Ducking / priority mixing
 - A/B EQ compare, latency & buffer controls

@@ -57,7 +57,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 tapManager: tapManager,
                 equalizerVM: equalizerVM,
                 presetStore: presetStore,
-                nowPlaying: nowPlaying
+                nowPlaying: nowPlaying,
+                appList: tapManager.appList
             )
         )
         self.popover = popover

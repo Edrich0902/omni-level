@@ -33,7 +33,7 @@ Grant these in **System Settings → Privacy & Security** (⋯ menu → Privacy 
 ## Usage
 
 1. Click the menu bar icon to open the popover. OmniLevel **auto-routes** eligible apps on launch (no manual play / tap bootstrap).
-2. **Apps** pane: per-app volume (0–200%), balance, mute, solo, On/Off through OmniLevel, output device, and per-app EQ. Toggle **Hide silent** to collapse quiet routed apps. Mixer controls persist across relaunch.
+2. **Apps** pane: per-app volume (0–200%), balance, mute, solo, On/Off through OmniLevel, output device, and per-app EQ. Use the **grip** on a card to drag into **Favorites** / a **group** / **Other**, or reorder within a section. Control-click also works. Group and Favorites menus support Mute all / Unmute all (groups also Bypass all / Route all). Toggle **Hide quiet** to collapse quiet routed apps. Mixer controls and list organization persist across relaunch.
 3. **Equalizer** pane: 16-band gains, presets, AutoEQ library / CSV import, and auto pre-amp. Session EQ restores on launch.
 4. **Monitor** pane: spectrum / visualizer and meters.
 5. Use **Bypass OmniLevel** in the ⋯ menu for dry system audio. Notch Now Playing sits at the top of the screen for transport.
@@ -57,7 +57,7 @@ chmod +x Scripts/run-dsp-validation.sh
 | `EqualizerDSP` | 16 peaking biquads via Accelerate `vDSP_biquad` |
 | `AutoPreAmpLimiter` | Headroom from peak boost + soft brickwall |
 | `SpectrumAnalyzer` | 2048-pt FFT for the glass visualizer |
-| `MixerStateStore` / `PerAppEQStore` / `AppRouteStore` | Durable mixer, EQ override, and output routing |
+| `MixerStateStore` / `AppListStore` / `PerAppEQStore` / `AppRouteStore` | Durable mixer, list organization, EQ override, and output routing |
 
 ## Bundle ID
 

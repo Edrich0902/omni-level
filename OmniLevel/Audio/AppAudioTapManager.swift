@@ -21,6 +21,7 @@ public final class AppAudioTapManager: ObservableObject {
     public let perAppEQ = PerAppEQStore()
     public let appRoutes = AppRouteStore()
     public let mixerState = MixerStateStore()
+    public let appList = AppListStore()
 
     private let identity = ProcessIdentity()
     private var workspaceObservers: [NSObjectProtocol] = []
@@ -631,24 +632,31 @@ public final class AppAudioTapManager: ObservableObject {
     private func markAllTapped(_ tapped: Bool) {
         let live = tapped ? Set(engine.processTaps.currentAppTaps().map(\.pid)) : []
         let routed = tapped ? computeRoutedSet() : []
-        for i in runningAppAudioNodes.indices {
-            let id = runningAppAudioNodes[i].id
-            runningAppAudioNodes[i].isTapped = routed.contains(id) && live.contains(id)
+        var nodes = runningAppAudioNodes
+        for i in nodes.indices {
+            let id = nodes[i].id
+            nodes[i].isTapped = routed.contains(id) && live.contains(id)
         }
+        runningAppAudioNodes = nodes
     }
 
     private func markAllTappedThroughRoute() {
         let live = Set(engine.processTaps.currentAppTaps().map(\.pid))
         let routed = computeRoutedSet()
-        for i in runningAppAudioNodes.indices {
-            let id = runningAppAudioNodes[i].id
-            runningAppAudioNodes[i].isTapped = routed.contains(id) && live.contains(id)
+        var nodes = runningAppAudioNodes
+        for i in nodes.indices {
+            let id = nodes[i].id
+            nodes[i].isTapped = routed.contains(id) && live.contains(id)
         }
+        runningAppAudioNodes = nodes
     }
 
     private func updateNode(pid: pid_t, mutate: (inout AppAudioNode) -> Void) {
         guard let idx = runningAppAudioNodes.firstIndex(where: { $0.id == pid }) else { return }
-        mutate(&runningAppAudioNodes[idx])
+        // Reassign the array so @Published fires — in-place element mutation does not.
+        var nodes = runningAppAudioNodes
+        mutate(&nodes[idx])
+        runningAppAudioNodes = nodes
     }
 
     private func observeWorkspace() {

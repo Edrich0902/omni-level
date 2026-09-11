@@ -60,6 +60,7 @@
 		C1PEREQ001BF00000000001 /* PerAppEQStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1PEREQ001FR00000000001 /* PerAppEQStore.swift */; };
 		C1ROUTE001BF00000000001 /* AppRouteStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1ROUTE001FR00000000001 /* AppRouteStore.swift */; };
 		C1MIXER001BF00000000001 /* MixerStateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1MIXER001FR00000000001 /* MixerStateStore.swift */; };
+		C1APPLIST001BF00000000001 /* AppListStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1APPLIST001FR00000000001 /* AppListStore.swift */; };
 		C1PEREQ002BF00000000002 /* PerAppEQSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1PEREQ002FR00000000002 /* PerAppEQSheet.swift */; };
 /* End PBXBuildFile section */
 
@@ -121,6 +122,7 @@
 		C1PEREQ001FR00000000001 /* PerAppEQStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerAppEQStore.swift; sourceTree = "<group>"; };
 		C1ROUTE001FR00000000001 /* AppRouteStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRouteStore.swift; sourceTree = "<group>"; };
 		C1MIXER001FR00000000001 /* MixerStateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MixerStateStore.swift; sourceTree = "<group>"; };
+		C1APPLIST001FR00000000001 /* AppListStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppListStore.swift; sourceTree = "<group>"; };
 		C1PEREQ002FR00000000002 /* PerAppEQSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerAppEQSheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -247,6 +249,7 @@
 				C1PEREQ001FR00000000001 /* PerAppEQStore.swift */,
 				C1ROUTE001FR00000000001 /* AppRouteStore.swift */,
 				C1MIXER001FR00000000001 /* MixerStateStore.swift */,
+				C1APPLIST001FR00000000001 /* AppListStore.swift */,
 				217A55CD95C4404BA3C78AE1 /* ProcessIdentity.swift */,
 				C1NOWPLAY002FR00000000002 /* MediaRemoteBridge.swift */,
 				C1NOWPLAY003FR00000000003 /* SpotifyController.swift */,
@@ -411,6 +414,7 @@
 				C1PEREQ001BF00000000001 /* PerAppEQStore.swift in Sources */,
 				C1ROUTE001BF00000000001 /* AppRouteStore.swift in Sources */,
 				C1MIXER001BF00000000001 /* MixerStateStore.swift in Sources */,
+				C1APPLIST001BF00000000001 /* AppListStore.swift in Sources */,
 				C1PEREQ002BF00000000002 /* PerAppEQSheet.swift in Sources */,
 				15DEB2CEFCF948B4BA18D9FC /* DSPValidation.swift in Sources */,
 			);
