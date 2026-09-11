@@ -7,6 +7,17 @@ import os
 /// Soft clipping engages only for overshoots that slip past auto headroom —
 /// normal levels pass completely unchanged.
 public final class AutoPreAmpLimiter: @unchecked Sendable {
+    public struct GRSnapshot: Sendable {
+        /// Instantaneous gain reduction in dB (≤ 0).
+        public var instantaneousdB: Float
+        /// Peak-hold GR in dB (≤ 0).
+        public var peakHolddB: Float
+        /// Times soft-ceiling engaged this session.
+        public var hitCount: UInt64
+
+        public static let zero = GRSnapshot(instantaneousdB: 0, peakHolddB: 0, hitCount: 0)
+    }
+
     private let lock = OSAllocatedUnfairLock()
     private var targetLinear: Float = 1.0
     private var currentLinear: Float = 1.0
@@ -16,6 +27,11 @@ public final class AutoPreAmpLimiter: @unchecked Sendable {
     /// Hard transparency below this absolute level after gain.
     private let safetyStart: Float = 0.985
     private let ceiling: Float = 0.999
+
+    private var grInstant: Float = 0
+    private var grPeakHold: Float = 0
+    private var grHitCount: UInt64 = 0
+    private let grPeakDecay: Float = 0.992
 
     public init() {}
 
@@ -37,6 +53,24 @@ public final class AutoPreAmpLimiter: @unchecked Sendable {
         lock.withLock { preAmpdB }
     }
 
+    public func snapshotGR() -> GRSnapshot {
+        lock.withLock {
+            GRSnapshot(
+                instantaneousdB: grInstant,
+                peakHolddB: grPeakHold,
+                hitCount: grHitCount
+            )
+        }
+    }
+
+    public func resetGRSession() {
+        lock.withLock {
+            grInstant = 0
+            grPeakHold = 0
+            grHitCount = 0
+        }
+    }
+
     public func process(
         left: UnsafeMutablePointer<Float>,
         right: UnsafeMutablePointer<Float>,
@@ -48,12 +82,17 @@ public final class AutoPreAmpLimiter: @unchecked Sendable {
         var gain = currentLinear
         let target = targetLinear
         let slew = slewPerSample
+        var maxGR: Float = 0
+        var hits: UInt64 = 0
         lock.unlock()
 
         // Fully transparent when pre-amp is off — no soft-clip coloring.
         if abs(target - 1) < 1e-6, abs(gain - 1) < 1e-5 {
             lock.lock()
             currentLinear = 1
+            grInstant = 0
+            grPeakHold *= grPeakDecay
+            if grPeakHold > -0.05 { grPeakHold = 0 }
             lock.unlock()
             return
         }
@@ -64,12 +103,25 @@ public final class AutoPreAmpLimiter: @unchecked Sendable {
                 let step = min(abs(delta), slew) * (delta >= 0 ? 1 : -1)
                 gain += step
             }
-            left[i] = applyGainSafely(left[i], gain: gain)
-            right[i] = applyGainSafely(right[i], gain: gain)
+            let (outL, grL) = applyGainSafelyReporting(left[i], gain: gain)
+            let (outR, grR) = applyGainSafelyReporting(right[i], gain: gain)
+            left[i] = outL
+            right[i] = outR
+            let gr = min(grL, grR)
+            if gr < maxGR { maxGR = gr }
+            if gr < -0.05 { hits += 1 }
         }
 
         lock.lock()
         currentLinear = gain
+        grInstant = maxGR
+        if maxGR < grPeakHold {
+            grPeakHold = maxGR
+        } else {
+            grPeakHold *= grPeakDecay
+            if grPeakHold > -0.05 { grPeakHold = 0 }
+        }
+        grHitCount += hits
         lock.unlock()
     }
 
@@ -99,7 +151,17 @@ public final class AutoPreAmpLimiter: @unchecked Sendable {
     }
 
     @inline(__always)
-    private func applyGainSafely(_ x: Float, gain: Float) -> Float {
-        softCeiling(x * gain)
+    private func applyGainSafelyReporting(_ x: Float, gain: Float) -> (Float, Float) {
+        let driven = x * gain
+        let y = softCeiling(driven)
+        let absDriven = abs(driven)
+        let absY = abs(y)
+        let gr: Float
+        if absDriven > 1e-6, absY < absDriven - 1e-7 {
+            gr = 20 * log10(absY / absDriven)
+        } else {
+            gr = 0
+        }
+        return (y, gr)
     }
 }

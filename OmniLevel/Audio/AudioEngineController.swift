@@ -33,6 +33,8 @@ public final class AudioEngineController: ObservableObject {
     public let limiter = AutoPreAmpLimiter()
     public let mixer = GainPanMixer()
     public let levels = AudioLevels()
+    /// Post-limiter stereo analyzer (LUFS, true peak, correlation, goniometer, …).
+    public let mixAnalyzer = MixAnalyzer()
     /// Post-EQ / post-mix spectrum (primary / system-default bus).
     public let spectrum = SpectrumAnalyzer()
     /// Pre-EQ mix bus spectrum (material before the equalizer).
@@ -164,6 +166,7 @@ public final class AudioEngineController: ObservableObject {
         let equalizer: EqualizerDSP
         let limiter: AutoPreAmpLimiter
         let levels: AudioLevels
+        let mixAnalyzer: MixAnalyzer
         let spectrum: SpectrumAnalyzer
         let spectrumInput: SpectrumAnalyzer
         let focusedSpectrum: SpectrumAnalyzer
@@ -181,6 +184,7 @@ public final class AudioEngineController: ObservableObject {
             equalizer: EqualizerDSP,
             limiter: AutoPreAmpLimiter,
             levels: AudioLevels,
+            mixAnalyzer: MixAnalyzer,
             spectrum: SpectrumAnalyzer,
             spectrumInput: SpectrumAnalyzer,
             focusedSpectrum: SpectrumAnalyzer,
@@ -194,6 +198,7 @@ public final class AudioEngineController: ObservableObject {
             self.equalizer = equalizer
             self.limiter = limiter
             self.levels = levels
+            self.mixAnalyzer = mixAnalyzer
             self.spectrum = spectrum
             self.spectrumInput = spectrumInput
             self.focusedSpectrum = focusedSpectrum
@@ -592,6 +597,7 @@ public final class AudioEngineController: ObservableObject {
         sampleRate = rate
         equalizer.setSampleRate(rate)
         limiter.setSampleRate(rate)
+        mixAnalyzer.setSampleRate(rate)
         eqOverrideTable.forEachDSP { $0.setSampleRate(rate) }
 
         let bufferFrames: UInt32 = 512
@@ -639,6 +645,7 @@ public final class AudioEngineController: ObservableObject {
             equalizer: equalizer,
             limiter: limiter,
             levels: levels,
+            mixAnalyzer: mixAnalyzer,
             spectrum: spectrum,
             spectrumInput: spectrumInput,
             focusedSpectrum: focusedSpectrum,
@@ -1148,6 +1155,7 @@ private func mixOutputCallback(
 
     if bus.isPrimary {
         ctx.levels.process(left: bus.mixLeft, right: bus.mixRight, frameCount: frames)
+        ctx.mixAnalyzer.process(left: bus.mixLeft, right: bus.mixRight, frameCount: frames)
         if meterThisBlock {
             // Post-EQ / post-mix (and limiter) — EQ fader “out” + Monitor visualizer.
             ctx.spectrum.push(samples: bus.mixLeft, count: frames)

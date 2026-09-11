@@ -47,7 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let popover = NSPopover()
         popover.behavior = .transient
         popover.animates = true
-        popover.contentSize = NSSize(width: 480, height: 760)
+        popover.contentSize = NSSize(width: 480, height: 820)
         if let appearance = NSAppearance(named: .vibrantDark) {
             popover.appearance = appearance
         }
@@ -93,7 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         if popover.isShown {
             closePopover()
         } else {
-            popover.contentSize = NSSize(width: 480, height: 760)
+            popover.contentSize = NSSize(width: 480, height: 820)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
             installClickMonitors()

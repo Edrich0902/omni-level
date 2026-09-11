@@ -188,4 +188,95 @@ public final class SpectrumAnalyzer: @unchecked Sendable {
         }
         return bandDisplay
     }
+
+    // MARK: - 1/3-octave RTA
+
+    public enum RTABallistics: Sendable {
+        case fast
+        case slow
+        case peakHold
+    }
+
+    /// ISO-ish 1/3-octave centre frequencies (25 Hz … 20 kHz).
+    public static let thirdOctaveCenters: [Float] = [
+        25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315,
+        400, 500, 630, 800, 1_000, 1_250, 1_600, 2_000, 2_500, 3_150,
+        4_000, 5_000, 6_300, 8_000, 10_000, 12_500, 16_000, 20_000
+    ]
+
+    private var rtaDisplay: [Float] = []
+    private var rtaPeaks: [Float] = []
+
+    /// Calibrated 1/3-octave RTA bars (dBFS). Call from UI/display thread.
+    public func rtaBars(
+        ballistics: RTABallistics = .fast,
+        sampleRate: Double,
+        dt: Float = 1.0 / 60.0
+    ) -> [Float] {
+        _ = analyze()
+        let freqs = Self.thirdOctaveCenters
+        let count = freqs.count
+        guard count > 0, sampleRate > 0 else { return [] }
+
+        if rtaDisplay.count != count {
+            rtaDisplay = [Float](repeating: -80, count: count)
+            rtaPeaks = [Float](repeating: -80, count: count)
+        }
+
+        let attack: Float
+        let release: Float
+        switch ballistics {
+        case .fast:
+            attack = 1 - exp(-dt / 0.015)
+            release = 1 - exp(-dt / 0.09)
+        case .slow:
+            attack = 1 - exp(-dt / 0.04)
+            release = 1 - exp(-dt / 0.35)
+        case .peakHold:
+            attack = 1 - exp(-dt / 0.012)
+            release = 1 - exp(-dt / 1.2)
+        }
+
+        let nyquist = Float(sampleRate) * 0.5
+        let binHz = Float(sampleRate) / Float(Self.fftSize)
+
+        for (i, freq) in freqs.enumerated() {
+            let f = min(max(freq, 20), nyquist * 0.98)
+            // ±1/6 octave ≈ one 1/3-octave band
+            let halfWidth = max(binHz * 1.2, f * (pow(2, 1.0 / 6.0) - 1))
+            let lo = max(1, Int((f - halfWidth) / binHz))
+            let hi = min(Self.binCount - 1, Int((f + halfWidth) / binHz) + 1)
+
+            var peak: Float = -80
+            var b = lo
+            while b <= hi {
+                peak = max(peak, magnitudes[b])
+                b += 1
+            }
+
+            let prev = rtaDisplay[i]
+            let alpha = peak > prev ? attack : release
+            let smoothed = prev + (peak - prev) * alpha
+            rtaDisplay[i] = smoothed
+
+            if peak > rtaPeaks[i] {
+                rtaPeaks[i] = peak
+            } else if ballistics == .peakHold {
+                rtaPeaks[i] += (smoothed - rtaPeaks[i]) * (1 - exp(-dt / 1.4))
+            } else {
+                rtaPeaks[i] = smoothed
+            }
+        }
+        return ballistics == .peakHold ? rtaPeaks : rtaDisplay
+    }
+
+    public func rtaPeakHoldBars() -> [Float] {
+        rtaPeaks
+    }
+
+    /// Latest FFT magnitudes in dB (UI thread). Useful for spectrogram columns.
+    public func magnitudeColumn() -> [Float] {
+        _ = analyze()
+        return magnitudes
+    }
 }

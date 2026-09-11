@@ -61,6 +61,7 @@
 		C1ROUTE001BF00000000001 /* AppRouteStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1ROUTE001FR00000000001 /* AppRouteStore.swift */; };
 		C1MIXER001BF00000000001 /* MixerStateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1MIXER001FR00000000001 /* MixerStateStore.swift */; };
 		C1APPLIST001BF00000000001 /* AppListStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1APPLIST001FR00000000001 /* AppListStore.swift */; };
+		C1MIXANAL001BF00000000001 /* MixAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1MIXANAL001FR00000000001 /* MixAnalyzer.swift */; };
 		C1PEREQ002BF00000000002 /* PerAppEQSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1PEREQ002FR00000000002 /* PerAppEQSheet.swift */; };
 /* End PBXBuildFile section */
 
@@ -123,6 +124,7 @@
 		C1ROUTE001FR00000000001 /* AppRouteStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRouteStore.swift; sourceTree = "<group>"; };
 		C1MIXER001FR00000000001 /* MixerStateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MixerStateStore.swift; sourceTree = "<group>"; };
 		C1APPLIST001FR00000000001 /* AppListStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppListStore.swift; sourceTree = "<group>"; };
+		C1MIXANAL001FR00000000001 /* MixAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MixAnalyzer.swift; sourceTree = "<group>"; };
 		C1PEREQ002FR00000000002 /* PerAppEQSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerAppEQSheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -200,6 +202,7 @@
 				BD3CAD5B56E24876BD922658 /* AudioEngineController.swift */,
 				D1B57AB7D20341319E01EB50 /* AudioLevels.swift */,
 				1510119DA8424FFFAA790FCF /* AutoPreAmpLimiter.swift */,
+				C1MIXANAL001FR00000000001 /* MixAnalyzer.swift */,
 				47D6A8E10B564E13A3887995 /* EqualizerDSP.swift */,
 				8AACF7BC9A534C448FA64152 /* GainPanMixer.swift */,
 				4CE47F08A31347D9A0B2F8BD /* ProcessTapIO.swift */,
@@ -415,6 +418,7 @@
 				C1ROUTE001BF00000000001 /* AppRouteStore.swift in Sources */,
 				C1MIXER001BF00000000001 /* MixerStateStore.swift in Sources */,
 				C1APPLIST001BF00000000001 /* AppListStore.swift in Sources */,
+				C1MIXANAL001BF00000000001 /* MixAnalyzer.swift in Sources */,
 				C1PEREQ002BF00000000002 /* PerAppEQSheet.swift in Sources */,
 				15DEB2CEFCF948B4BA18D9FC /* DSPValidation.swift in Sources */,
 			);

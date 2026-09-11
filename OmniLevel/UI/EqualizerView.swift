@@ -26,8 +26,11 @@ struct EqualizerView: View {
     @State private var inputLevels: [CGFloat] = Array(repeating: 0, count: EqualizerDSP.bandCount)
     @State private var outputLevels: [CGFloat] = Array(repeating: 0, count: EqualizerDSP.bandCount)
     @State private var lastTick: Date = .now
+    @State private var curveSpectrumPost: [Float] = Array(repeating: -80, count: 48)
+    @State private var curveSpectrumPre: [Float] = Array(repeating: -80, count: 48)
 
     private let sliderHeight: CGFloat = 180
+    private let curveSpectrumBarCount = 48
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -131,6 +134,10 @@ struct EqualizerView: View {
     private var curveCanvas: some View {
         let points = viewModel.magnitudePoints(count: 120)
         return Canvas { context, size in
+            // Live spectrum underlay (pre ghost + post fill) on the same log-frequency axis.
+            drawSpectrumUnderlay(context: context, size: size, values: curveSpectrumPre, color: OmniTheme.accent.opacity(0.12))
+            drawSpectrumUnderlay(context: context, size: size, values: curveSpectrumPost, color: OmniTheme.amber.opacity(0.22))
+
             // Faint gridlines
             for db in stride(from: -24, through: 24, by: 12) {
                 let y = yPosition(db: Float(db), height: size.height)
@@ -191,6 +198,36 @@ struct EqualizerView: View {
         }
     }
 
+    private func drawSpectrumUnderlay(
+        context: GraphicsContext,
+        size: CGSize,
+        values: [Float],
+        color: Color
+    ) {
+        guard values.count > 1 else { return }
+        let count = values.count
+        var path = Path()
+        for i in 0..<count {
+            let t = Float(i) / Float(count - 1)
+            let freq = 20 * pow(1000, t) // 20…20k log
+            let x = xPosition(freq: freq, width: size.width)
+            // Map −72…0 dBFS into lower 55% of canvas height (under the ±24 dB curve)
+            let unit = max(0, min(1, (values[i] + 72) / 72))
+            let y = size.height - CGFloat(unit) * size.height * 0.55
+            if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
+            else { path.addLine(to: CGPoint(x: x, y: y)) }
+        }
+        var fill = path
+        if let last = values.indices.last {
+            let t = Float(last) / Float(max(count - 1, 1))
+            let freq = 20 * pow(1000, t)
+            fill.addLine(to: CGPoint(x: xPosition(freq: freq, width: size.width), y: size.height))
+            fill.addLine(to: CGPoint(x: 0, y: size.height))
+            fill.closeSubpath()
+            context.fill(fill, with: .color(color))
+        }
+    }
+
     private var bandSliders: some View {
         HStack(alignment: .bottom, spacing: 2) {
             ForEach(Array(viewModel.bands.enumerated()), id: \.element.id) { index, band in
@@ -241,6 +278,29 @@ struct EqualizerView: View {
         let nextOut = rawOut.map { CGFloat(dbToUnit($0)) }
         if levelsDiffer(inputLevels, nextIn) { inputLevels = nextIn }
         if levelsDiffer(outputLevels, nextOut) { outputLevels = nextOut }
+
+        // Curve underlay from raw FFT — do not call logBars (that fights Monitor display state).
+        curveSpectrumPre = logSpectrumUnderlay(from: inputAnalyzer, count: curveSpectrumBarCount)
+        curveSpectrumPost = logSpectrumUnderlay(from: outputAnalyzer, count: curveSpectrumBarCount)
+    }
+
+    private func logSpectrumUnderlay(from analyzer: SpectrumAnalyzer, count: Int) -> [Float] {
+        let mags = analyzer.magnitudeColumn()
+        guard count > 0, !mags.isEmpty else { return Array(repeating: -80, count: count) }
+        var out = [Float](repeating: -80, count: count)
+        let usable = max(1, SpectrumAnalyzer.binCount - 1)
+        for i in 0..<count {
+            let t0 = Float(i) / Float(count)
+            let t1 = Float(i + 1) / Float(count)
+            let b0 = 1 + Int(pow(Float(usable), t0))
+            let b1 = max(b0 + 1, 1 + Int(pow(Float(usable), t1)))
+            var peak: Float = -80
+            for b in b0..<min(b1, mags.count) {
+                peak = max(peak, mags[b])
+            }
+            out[i] = peak
+        }
+        return out
     }
 
     private func levelsDiffer(_ a: [CGFloat], _ b: [CGFloat]) -> Bool {

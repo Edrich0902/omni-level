@@ -280,7 +280,11 @@ struct ContentView: View {
                     case .apps:
                         appsPane
                     case .monitor:
-                        VisualizerView(engine: engine)
+                        VisualizerView(
+                            engine: engine,
+                            tapManager: tapManager,
+                            isActive: pane == .monitor
+                        )
                             .padding(.horizontal, 16)
                             .padding(.bottom, 16)
                     }
@@ -289,7 +293,7 @@ struct ContentView: View {
                 .animation(.spring(response: 0.35, dampingFraction: 0.86), value: pane)
             }
         }
-        .frame(width: 480, height: 760)
+        .frame(width: 480, height: 820)
         .preferredColorScheme(.dark)
         .onAppear {
             engine.refreshDevices()
