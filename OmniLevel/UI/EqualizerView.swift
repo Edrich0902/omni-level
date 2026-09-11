@@ -125,7 +125,7 @@ struct EqualizerView: View {
             let n = overrideAppCount
             return "Global — overridden by \(n) app\(n == 1 ? "" : "s")"
         }
-        return "Live band meters · accent = out · soft = in · double‑click fader to zero"
+        return "Band meters · blue = in · amber = out · mint = your gain"
     }
 
     private var curveCanvas: some View {

@@ -260,75 +260,86 @@ struct VerticalGainSlider: View {
             ZStack {
                 // Track well
                 Capsule()
-                    .fill(Color.black.opacity(0.32))
-                    .frame(width: trackW)
+                    .fill(Color.black.opacity(0.38))
+                    .frame(width: trackW + 2)
                     .overlay {
                         Capsule()
                             .strokeBorder(OmniTheme.strokeSoft, lineWidth: 1)
                     }
 
-                // Input spectrum (pre-EQ) — soft wider glow from bottom
-                spectrumFill(
-                    level: inputLevel,
-                    height: h,
-                    width: trackW + 4,
-                    colors: [
-                        Color.white.opacity(0.04),
-                        Color.white.opacity(0.18 + inputLevel * 0.22)
-                    ]
-                )
-                .position(x: cx, y: h - (h * min(1, max(0, inputLevel)) * 0.92) / 2)
+                // Live meters — cool / warm so they never fight the mint gain control.
+                let inH = max(0, h * min(1, max(0, inputLevel)) * 0.92)
+                let outH = max(0, h * min(1, max(0, outputLevel)) * 0.92)
+                let barW: CGFloat = 3
+                // Input (pre-EQ) — left, cool blue
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.35, green: 0.55, blue: 0.85).opacity(0.35),
+                                Color(red: 0.55, green: 0.78, blue: 1.0).opacity(0.9)
+                            ],
+                            startPoint: .bottom,
+                            endPoint: .top
+                        )
+                    )
+                    .frame(width: barW, height: inH > 1 ? inH : 0)
+                    .position(x: cx - 3.2, y: h - inH / 2)
+                    .opacity(inH > 2 ? 0.95 : 0)
+                // Output (post-EQ) — right, amber
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                OmniTheme.amber.opacity(0.4),
+                                OmniTheme.amber.opacity(0.95),
+                                Color(red: 1.0, green: 0.72, blue: 0.35)
+                            ],
+                            startPoint: .bottom,
+                            endPoint: .top
+                        )
+                    )
+                    .frame(width: barW, height: outH > 1 ? outH : 0)
+                    .position(x: cx + 3.2, y: h - outH / 2)
+                    .opacity(outH > 2 ? 0.95 : 0)
 
-                // Output spectrum (post-EQ) — accent energy from bottom
-                spectrumFill(
-                    level: outputLevel,
-                    height: h,
-                    width: trackW - 1,
-                    colors: [
-                        OmniTheme.accent.opacity(0.12),
-                        OmniTheme.accent.opacity(0.55 + outputLevel * 0.4),
-                        OmniTheme.mint.opacity(0.75)
-                    ]
-                )
-                .position(x: cx, y: h - (h * min(1, max(0, outputLevel)) * 0.92) / 2)
-
-                // Gain fill from centre 0 dB to thumb
+                // Gain fill (mint) — control only, sits above meters
                 let fillTop = min(y, mid)
                 let fillBottom = max(y, mid)
                 Capsule()
                     .fill(
                         LinearGradient(
                             colors: [
-                                OmniTheme.accent.opacity(0.85),
-                                OmniTheme.mint.opacity(0.9)
+                                OmniTheme.mint.opacity(0.95),
+                                OmniTheme.accent.opacity(0.9)
                             ],
                             startPoint: .bottom,
                             endPoint: .top
                         )
                     )
-                    .frame(width: 3, height: max(2, fillBottom - fillTop))
+                    .frame(width: 2.5, height: max(2, fillBottom - fillTop))
                     .position(x: cx, y: (fillTop + fillBottom) / 2)
-                    .opacity(0.9)
+                    .opacity(0.95)
 
                 // Center zero line
                 Rectangle()
-                    .fill(Color.white.opacity(0.28))
+                    .fill(Color.white.opacity(0.32))
                     .frame(width: 14, height: 1)
                     .position(x: cx, y: mid)
 
-                // Thumb
+                // Thumb — neutral white, no mint glow (meters own cool/warm)
                 Circle()
                     .fill(
                         LinearGradient(
-                            colors: [Color.white, Color.white.opacity(0.85)],
+                            colors: [Color.white, Color.white.opacity(0.88)],
                             startPoint: .top,
                             endPoint: .bottom
                         )
                     )
                     .frame(width: 15, height: 15)
-                    .shadow(color: OmniTheme.accent.opacity(0.4 + outputLevel * 0.35), radius: 5, y: 1)
+                    .shadow(color: Color.black.opacity(0.45), radius: 3, y: 1)
                     .overlay {
-                        Circle().strokeBorder(OmniTheme.accent.opacity(0.55), lineWidth: 1)
+                        Circle().strokeBorder(Color.white.opacity(0.75), lineWidth: 1)
                     }
                     .position(x: cx, y: y)
             }
@@ -354,25 +365,5 @@ struct VerticalGainSlider: View {
         }
         .frame(height: trackHeight)
         // No implicit animation on level ticks — Canvas-like discrete updates only.
-    }
-
-    private func spectrumFill(
-        level: CGFloat,
-        height: CGFloat,
-        width: CGFloat,
-        colors: [Color]
-    ) -> some View {
-        let unit = min(1, max(0, level))
-        let fillH = max(1.5, height * unit * 0.92)
-        return Capsule()
-            .fill(
-                LinearGradient(
-                    colors: colors,
-                    startPoint: .bottom,
-                    endPoint: .top
-                )
-            )
-            .frame(width: width, height: fillH)
-            .opacity(unit > 0.02 ? 1 : 0)
     }
 }

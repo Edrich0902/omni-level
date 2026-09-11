@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @MainActor
@@ -29,17 +30,60 @@ struct ContentView: View {
     @StateObject private var launchAtLogin = LaunchAtLoginService()
     @State private var pane: MainPane = .equalizer
     @State private var appSearch = ""
+    @AppStorage("omniLevel.hideSilentApps") private var hideSilentApps = false
+    @State private var silentSince: [pid_t: Date] = [:]
+    /// Local copy refreshed by TimelineView so Apps VU redraws inside the menu-bar popover.
+    @State private var appsLiveLevels: [pid_t: Float] = [:]
     @StateObject private var perAppEQEditorHolder = PerAppEQEditorHolder()
 
     private var engine: AudioEngineController { tapManager.engine }
 
-    private var filteredApps: [AppAudioNode] {
+    private var searchedApps: [AppAudioNode] {
         let q = appSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return tapManager.runningAppAudioNodes }
         return tapManager.runningAppAudioNodes.filter {
             $0.appName.localizedCaseInsensitiveContains(q)
             || ($0.bundleIdentifier?.localizedCaseInsensitiveContains(q) ?? false)
         }
+    }
+
+    private var displayedApps: [AppAudioNode] {
+        let searched = searchedApps
+        let searching = !appSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard hideSilentApps, !searching else { return searched }
+        let now = Date()
+        return searched.filter { node in
+            // Only hide apps we can meter (On / through OmniLevel).
+            guard node.isTapped else { return true }
+            // Muted On apps count as quiet.
+            if node.isMuted { return false }
+            let level = appsLiveLevels[node.id] ?? tapManager.liveLeveldB(for: node.id)
+            if level >= -42 { return true }
+            guard let since = silentSince[node.id] else { return true }
+            return now.timeIntervalSince(since) < 0.8
+        }
+    }
+
+    private var hiddenSilentCount: Int {
+        guard hideSilentApps else { return 0 }
+        let searching = !appSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard !searching else { return 0 }
+        return max(0, searchedApps.count - displayedApps.count)
+    }
+
+    private var hideSilentHint: String {
+        if !hideSilentApps { return "" }
+        if !appSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Search shows all matches (hide quiet is paused)"
+        }
+        if hiddenSilentCount > 0 {
+            return "\(hiddenSilentCount) quiet On app\(hiddenSilentCount == 1 ? "" : "s") hidden"
+        }
+        let onCount = tapManager.runningAppAudioNodes.filter(\.isTapped).count
+        if onCount == 0 {
+            return "No apps are On yet — turn an app On to meter & hide quiet ones"
+        }
+        return "Hiding quiet On apps — pause Spotify/Arc to see them leave the list"
     }
 
     var body: some View {
@@ -102,6 +146,48 @@ struct ContentView: View {
             tapManager.refreshActiveAudioProcesses()
             if tapManager.isOmniLevelBypassed, tapManager.lastError != nil {
                 tapManager.clearError()
+            }
+            refreshSilentTracking()
+        }
+        .onChange(of: tapManager.runningAppAudioNodes) { _, _ in
+            refreshSilentTracking()
+        }
+        .onChange(of: tapManager.liveLevelsdB) { _, _ in
+            refreshSilentTracking()
+        }
+        .onReceive(Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()) { _ in
+            refreshSilentTracking()
+        }
+    }
+
+    private func refreshSilentTracking() {
+        let now = Date()
+        var next = silentSince
+        let alive = Set(tapManager.runningAppAudioNodes.map(\.id))
+        for node in tapManager.runningAppAudioNodes {
+            let level = appsLiveLevels[node.id] ?? tapManager.liveLeveldB(for: node.id)
+            if !node.isTapped || node.isMuted || level >= -42 {
+                next.removeValue(forKey: node.id)
+            } else if next[node.id] == nil {
+                next[node.id] = now
+            }
+        }
+        next = next.filter { alive.contains($0.key) }
+        if next != silentSince {
+            silentSince = next
+        }
+    }
+
+    private func openPrivacyPane(_ anchor: String) {
+        // Best-effort deep links into System Settings → Privacy & Security.
+        let candidates = [
+            "x-apple.systempreferences:com.apple.preference.security?\(anchor)",
+            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?\(anchor)",
+            "x-apple.systempreferences:com.apple.preference.security"
+        ]
+        for raw in candidates {
+            if let url = URL(string: raw), NSWorkspace.shared.open(url) {
+                return
             }
         }
     }
@@ -184,6 +270,20 @@ struct ContentView: View {
                 if let err = launchAtLogin.lastError {
                     Text(err)
                         .foregroundStyle(.secondary)
+                }
+
+                Divider()
+
+                Section("Privacy") {
+                    Button("Audio Capture Settings") {
+                        openPrivacyPane("Privacy_AudioCapture")
+                    }
+                    Button("Microphone Settings") {
+                        openPrivacyPane("Privacy_Microphone")
+                    }
+                    Button("Automation Settings") {
+                        openPrivacyPane("Privacy_Automation")
+                    }
                 }
 
                 Divider()
@@ -363,10 +463,26 @@ struct ContentView: View {
             HStack(spacing: 10) {
                 SectionLabel(
                     title: "Applications",
-                    trailing: "\(filteredApps.count)"
+                    trailing: "\(displayedApps.count)"
                 )
+                Spacer(minLength: 0)
+                Toggle(isOn: $hideSilentApps) {
+                    Text("Hide quiet")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(OmniTheme.textSecondary)
+                }
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .help("Hide On apps that aren’t currently playing audio (and muted On apps). Off apps stay visible.")
             }
             .padding(.horizontal, 16)
+
+            if hideSilentApps, !hideSilentHint.isEmpty {
+                Text(hideSilentHint)
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(OmniTheme.textSecondary)
+                    .padding(.horizontal, 16)
+            }
 
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
@@ -393,15 +509,20 @@ struct ContentView: View {
 
             if tapManager.runningAppAudioNodes.isEmpty {
                 emptyState(message: "No apps detected yet")
-            } else if filteredApps.isEmpty {
-                emptyState(message: "No apps match “\(appSearch)”")
+            } else if displayedApps.isEmpty {
+                emptyState(
+                    message: appSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? "All routed apps are silent"
+                        : "No apps match “\(appSearch)”"
+                )
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(spacing: 8) {
-                            ForEach(filteredApps) { node in
+                            ForEach(displayedApps) { node in
                                 AppVolumeCard(
                                     node: node,
+                                    leveldB: appsLiveLevels[node.id] ?? tapManager.liveLeveldB(for: node.id),
                                     outputDevices: engine.devices.outputDevices,
                                     onVolume: { tapManager.setVolume(pid: node.id, volume: $0) },
                                     onPan: { tapManager.setPan(pid: node.id, pan: $0) },
@@ -459,6 +580,19 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // Popover won't reliably redraw from Timer/@Published — same pattern as EQ fader meters.
+        .background {
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { timeline in
+                Color.clear
+                    .onChange(of: timeline.date) { _, _ in
+                        appsLiveLevels = tapManager.pumpLiveLevels()
+                        refreshSilentTracking()
+                    }
+                    .onAppear {
+                        appsLiveLevels = tapManager.pumpLiveLevels()
+                    }
+            }
+        }
     }
 
     private func emptyState(message: String) -> some View {

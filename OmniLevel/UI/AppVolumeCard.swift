@@ -3,6 +3,8 @@ import SwiftUI
 
 struct AppVolumeCard: View {
     let node: AppAudioNode
+    /// Live loudness in dBFS (updated independently of other card state for snappy meters).
+    let leveldB: Float
     let outputDevices: [AudioDeviceInfo]
     var onVolume: (Float) -> Void
     var onPan: (Float) -> Void
@@ -14,6 +16,12 @@ struct AppVolumeCard: View {
     var onSelectOutputUID: (String?) -> Void
 
     private var panOffCenter: Bool { abs(node.pan) > 0.02 }
+
+    private var levelCaption: String {
+        guard node.isTapped else { return "—" }
+        if leveldB <= -48 { return "quiet" }
+        return String(format: "%.0f", leveldB)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -104,6 +112,22 @@ struct AppVolumeCard: View {
                     .foregroundStyle(OmniTheme.textPrimary.opacity(0.85))
                     .monospacedDigit()
                     .frame(width: 40, alignment: .trailing)
+            }
+
+            // Live signal level (how loud the app is right now — not the volume knob)
+            HStack(spacing: 8) {
+                Text("Level")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(OmniTheme.textSecondary)
+                    .frame(width: 52, alignment: .leading)
+                AppPeakMeter(leveldB: leveldB, isActive: node.isTapped)
+                    .frame(height: 10)
+                Text(levelCaption)
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(OmniTheme.textSecondary)
+                    .monospacedDigit()
+                    .frame(width: 44, alignment: .trailing)
+                    .contentTransition(.identity)
             }
 
             // Balance
@@ -265,5 +289,50 @@ struct AppVolumeCard: View {
         }
         .buttonStyle(.plain)
         .help(title)
+    }
+}
+
+/// Horizontal loudness meter. Uses RMS (how loud it sounds), not sample peak.
+private struct AppPeakMeter: View {
+    let leveldB: Float
+    let isActive: Bool
+
+    /// Map −48…0 dBFS → 0…1 so silence is empty and normal music sits mid–high (not pegged).
+    private var fraction: CGFloat {
+        guard isActive else { return 0 }
+        let clamped = max(-48, min(0, leveldB))
+        if clamped <= -47.5 { return 0 }
+        return CGFloat((clamped + 48) / 48)
+    }
+
+    private var fill: Color {
+        if !isActive { return OmniTheme.textSecondary.opacity(0.35) }
+        if leveldB > -6 { return OmniTheme.coral }
+        if leveldB > -14 { return OmniTheme.amber }
+        return OmniTheme.mint
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(OmniTheme.fill)
+                Capsule()
+                    .fill(fill)
+                    .frame(width: w * fraction)
+            }
+        }
+        .overlay {
+            Capsule()
+                .strokeBorder(OmniTheme.strokeSoft, lineWidth: 1)
+        }
+        .help(
+            isActive
+            ? "How loud this app is right now (dBFS)."
+            : "Turn On to route through OmniLevel and see live level."
+        )
+        .opacity(isActive ? 1 : 0.55)
+        .transaction { $0.animation = nil }
     }
 }

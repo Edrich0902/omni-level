@@ -14,15 +14,20 @@ public final class AppAudioTapManager: ObservableObject {
     /// Master bypass — all taps destroyed; dry system audio.
     @Published public private(set) var isOmniLevelBypassed = false
     @Published public private(set) var eqOverrideAppCount: Int = 0
+    /// Live per-app loudness (dBFS), published separately so meters stay snappy.
+    @Published public private(set) var liveLevelsdB: [pid_t: Float] = [:]
 
     public let engine: AudioEngineController
     public let perAppEQ = PerAppEQStore()
     public let appRoutes = AppRouteStore()
+    public let mixerState = MixerStateStore()
 
     private let identity = ProcessIdentity()
     private var workspaceObservers: [NSObjectProtocol] = []
     private var deviceObserver: NSObjectProtocol?
     private var refreshTimer: Timer?
+    private var meterTimer: Timer?
+    private var persistTask: Task<Void, Never>?
     /// Apps that bypass OmniLevel (play straight to the system).
     private var bypassPIDs: Set<pid_t> = []
     private var rebuildTask: Task<Void, Never>?
@@ -45,6 +50,7 @@ public final class AppAudioTapManager: ObservableObject {
             }
             return node.outputDeviceUID
         }
+        isOmniLevelBypassed = mixerState.isOmniLevelBypassed
         observeWorkspace()
         observeDeviceChanges()
         refreshActiveAudioProcesses()
@@ -53,6 +59,15 @@ public final class AppAudioTapManager: ObservableObject {
                 self?.refreshActiveAudioProcesses()
             }
         }
+        // ~30 Hz meter pump on .common so scrolling / popover idle still updates.
+        let meter = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                self.updatePeakLevelsFromEngine()
+            }
+        }
+        RunLoop.main.add(meter, forMode: .common)
+        meterTimer = meter
     }
 
     public func clearError() {
@@ -62,6 +77,8 @@ public final class AppAudioTapManager: ObservableObject {
     public func shutdown() {
         rebuildTask?.cancel()
         launchRetryTask?.cancel()
+        persistTask?.cancel()
+        flushMixerState()
         for o in workspaceObservers {
             NSWorkspace.shared.notificationCenter.removeObserver(o)
         }
@@ -72,11 +89,19 @@ public final class AppAudioTapManager: ObservableObject {
         }
         refreshTimer?.invalidate()
         refreshTimer = nil
+        meterTimer?.invalidate()
+        meterTimer = nil
         engine.stopSystemRouting()
         isSystemRoutingActive = false
     }
 
     public func bootstrap() {
+        if isOmniLevelBypassed {
+            isConnecting = false
+            engineStatusMessage = "Bypassed — system audio"
+            updateStatus()
+            return
+        }
         isConnecting = true
         engineStatusMessage = "Connecting audio…"
         Task { @MainActor in
@@ -106,6 +131,7 @@ public final class AppAudioTapManager: ObservableObject {
             return
         }
         isOmniLevelBypassed = bypassed
+        mixerState.setMasterBypass(bypassed)
         if bypassed {
             launchRetryTask?.cancel()
             rebuildTask?.cancel()
@@ -144,6 +170,12 @@ public final class AppAudioTapManager: ObservableObject {
             let pid = app.processIdentifier
             if pid == ownPID { continue }
 
+            let bundleID = app.bundleIdentifier
+            let storedMixer = mixerState.entry(forBundleID: bundleID)
+            if previous[pid] == nil, let storedMixer, storedMixer.bypassed {
+                bypassPIDs.insert(pid)
+            }
+
             let wantRoute = !isOmniLevelBypassed && !bypassPIDs.contains(pid)
             let related = identity.relatedPIDs(for: app)
             // Probe Core Audio only for apps we route — avoids main-thread storms.
@@ -165,7 +197,6 @@ public final class AppAudioTapManager: ObservableObject {
                 needsClusterRebuild = true
             }
 
-            let bundleID = app.bundleIdentifier
             let storedUID = appRoutes.outputDeviceUID(forBundleID: bundleID)
             let resolved = engine.resolveOutputDevice(uid: storedUID, refresh: false)
             let effectiveUID: String? = {
@@ -194,12 +225,18 @@ public final class AppAudioTapManager: ObservableObject {
                     outputFallback: resolved.fallback && storedUID != nil
                 ))
             } else if let icon = app.icon ?? NSImage(systemSymbolName: "app.fill", accessibilityDescription: nil) {
+                let hydrated = storedMixer
                 nodes.append(AppAudioNode(
                     id: pid,
                     appName: app.localizedName ?? "Unknown",
                     bundleIdentifier: bundleID,
                     appIcon: icon,
+                    volume: hydrated?.volume ?? 1,
+                    pan: hydrated?.pan ?? 0,
+                    isMuted: hydrated?.isMuted ?? false,
+                    isSolo: hydrated?.isSolo ?? false,
                     isTapped: isThrough,
+                    peakLeveldB: -60,
                     hasEQOverride: hasEQ,
                     outputDeviceUID: effectiveUID,
                     outputFallback: resolved.fallback && storedUID != nil
@@ -251,11 +288,13 @@ public final class AppAudioTapManager: ObservableObject {
     public func setVolume(pid: pid_t, volume: Float) {
         updateNode(pid: pid) { $0.volume = max(0, min(2, volume)) }
         syncMixer(pid: pid)
+        schedulePersistMixerState()
     }
 
     public func setPan(pid: pid_t, pan: Float) {
         updateNode(pid: pid) { $0.pan = max(-1, min(1, pan)) }
         syncMixer(pid: pid)
+        schedulePersistMixerState()
     }
 
     public func setMuted(pid: pid_t, muted: Bool) {
@@ -269,12 +308,14 @@ public final class AppAudioTapManager: ObservableObject {
             }
         }
         syncMixer(pid: pid)
+        schedulePersistMixerState()
     }
 
     public func setSolo(pid: pid_t, solo: Bool) {
         updateNode(pid: pid) { $0.isSolo = solo }
         syncAllMixerParams()
         scheduleRouteRebuild()
+        schedulePersistMixerState()
     }
 
     public func toggleMute(pid: pid_t) {
@@ -312,6 +353,7 @@ public final class AppAudioTapManager: ObservableObject {
             }
         }
         syncMixer(pid: pid)
+        schedulePersistMixerState()
         scheduleRouteRebuild()
     }
 
@@ -395,6 +437,65 @@ public final class AppAudioTapManager: ObservableObject {
                 engine.clearStreamEQOverride(pid: node.id)
             }
         }
+    }
+
+    // MARK: - Mixer persistence + meters
+
+    private func schedulePersistMixerState() {
+        persistTask?.cancel()
+        persistTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard !Task.isCancelled else { return }
+            self.flushMixerState()
+        }
+    }
+
+    private func flushMixerState() {
+        var apps: [String: MixerStateStore.AppEntry] = mixerState.apps
+        for node in runningAppAudioNodes {
+            guard let bundleID = node.bundleIdentifier, !bundleID.isEmpty else { continue }
+            apps[bundleID] = MixerStateStore.AppEntry(
+                volume: node.volume,
+                pan: node.pan,
+                isMuted: node.isMuted,
+                isSolo: node.isSolo,
+                bypassed: bypassPIDs.contains(node.id)
+            )
+        }
+        mixerState.replaceSnapshot(apps: apps, masterBypass: isOmniLevelBypassed)
+    }
+
+    private func updatePeakLevelsFromEngine() {
+        let peaks = engine.snapshotPeakLevels()
+        let nodes = runningAppAudioNodes
+        guard !nodes.isEmpty else {
+            if !liveLevelsdB.isEmpty { liveLevelsdB = [:] }
+            return
+        }
+
+        var next: [pid_t: Float] = [:]
+        next.reserveCapacity(nodes.count)
+        for node in nodes {
+            let prev = liveLevelsdB[node.id] ?? -60
+            if node.isTapped, let live = peaks[node.id] {
+                next[node.id] = live
+            } else {
+                next[node.id] = max(-60, prev - 4)
+            }
+        }
+        liveLevelsdB = next
+    }
+
+    /// Snapshot + publish live levels. Call from a TimelineView while the Apps pane is visible
+    /// (NSPopover often won't redraw from Timer-driven @Published alone).
+    @discardableResult
+    public func pumpLiveLevels() -> [pid_t: Float] {
+        updatePeakLevelsFromEngine()
+        return liveLevelsdB
+    }
+
+    public func liveLeveldB(for pid: pid_t) -> Float {
+        liveLevelsdB[pid] ?? -60
     }
 
     // MARK: - Route rebuild

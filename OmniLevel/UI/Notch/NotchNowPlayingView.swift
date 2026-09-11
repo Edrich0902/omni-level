@@ -2,7 +2,10 @@ import AppKit
 import SwiftUI
 
 /// SwiftUI content clipped to a Dynamic Island–style notch hull.
-/// Pure black, proportional layout — hangs from the physical camera housing.
+///
+/// Expand/collapse is a single clipped morph: the black hull grows/shrinks while
+/// tray content is revealed or sheared away by the clip — never layout-compressed
+/// inside a shrinking VStack (that was the laggy / “weird” collapse).
 struct NotchNowPlayingRootView: View {
     @ObservedObject var viewModel: NotchNowPlayingViewModel
     @ObservedObject private var service: NowPlayingService
@@ -12,80 +15,135 @@ struct NotchNowPlayingRootView: View {
         self._service = ObservedObject(wrappedValue: viewModel.service)
     }
 
-    private var topRadius: CGFloat { viewModel.isExpanded ? 8 : 3 }
-    private var bottomRadius: CGFloat {
-        if viewModel.isExpanded { return 16 }
-        return min(10, max(6, viewModel.geometry.height * 0.28))
+    private var pureBlack: Color { Color(red: 0, green: 0, blue: 0) }
+
+    private var collapsedWingWidth: CGFloat {
+        // Outer pad + 18pt art + gap + live dot + inner pad from camera housing.
+        service.players.count > 1 ? 50 : 46
     }
 
-    private var pureBlack: Color { Color(red: 0, green: 0, blue: 0) }
+    private var collapsedWidth: CGFloat {
+        viewModel.geometry.width + collapsedWingWidth * 2
+    }
+
+    private var expandedWidth: CGFloat {
+        let count = max(service.players.count, 1)
+        return max(collapsedWidth, count > 1 ? 340 : 300)
+    }
+
+    private var expandedBodyHeight: CGFloat {
+        let count = max(service.players.count, 1)
+        let row: CGFloat = 56
+        let body = CGFloat(count) * row + CGFloat(max(count - 1, 0)) * 6 + 12
+        return min(body, 110)
+    }
+
+    private var islandWidth: CGFloat {
+        viewModel.isExpanded ? expandedWidth : collapsedWidth
+    }
+
+    private var islandHeight: CGFloat {
+        viewModel.isExpanded
+            ? viewModel.geometry.height + expandedBodyHeight
+            : viewModel.geometry.height
+    }
+
+    private var topRadius: CGFloat { viewModel.isExpanded ? 8 : 3 }
+    private var bottomRadius: CGFloat {
+        viewModel.isExpanded
+            ? 20
+            : min(10, max(6, viewModel.geometry.height * 0.28))
+    }
 
     var body: some View {
         ZStack(alignment: .top) {
-            NotchShape(topCornerRadius: topRadius, bottomCornerRadius: bottomRadius)
-                .fill(pureBlack)
+            Color.clear
 
-            VStack(spacing: 0) {
-                Color.clear
-                    .frame(height: viewModel.geometry.height)
-                    .overlay {
-                        if !viewModel.isExpanded {
-                            collapsedStrip
-                        }
-                    }
-
-                if viewModel.isExpanded {
-                    expandedTray
-                        .padding(.horizontal, 10)
-                        .padding(.top, 2)
-                        .padding(.bottom, 8)
-                        // Opacity only — panel frame animation is owned by AppKit.
-                        .transition(.opacity)
-                }
-            }
+            island
+                .frame(width: islandWidth, height: islandHeight, alignment: .top)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .clipShape(NotchShape(topCornerRadius: topRadius, bottomCornerRadius: bottomRadius))
         .background(Color.clear)
         .preferredColorScheme(.dark)
-        .compositingGroup()
-        .animation(.easeOut(duration: 0.12), value: viewModel.isExpanded)
-        .animation(.easeOut(duration: 0.15), value: service.players.map(\.id))
+    }
+
+    private var island: some View {
+        let shape = NotchShape(topCornerRadius: topRadius, bottomCornerRadius: bottomRadius)
+
+        return ZStack(alignment: .top) {
+            shape.fill(pureBlack)
+
+            // Collapsed wings live only in the camera band.
+            collapsedStrip
+                .frame(height: viewModel.geometry.height)
+                .opacity(viewModel.isExpanded ? 0 : 1)
+                .allowsHitTesting(!viewModel.isExpanded)
+
+            // Tray is overlaid below the band at a fixed layout size so collapsing
+            // only clips it away — no VStack compression / content squish.
+            expandedTray
+                .padding(.horizontal, 10)
+                .padding(.top, 2)
+                .padding(.bottom, 8)
+                .frame(width: expandedWidth, height: expandedBodyHeight, alignment: .top)
+                .frame(maxWidth: .infinity, alignment: .top)
+                .padding(.top, viewModel.geometry.height)
+                .allowsHitTesting(viewModel.isExpanded)
+        }
+        .frame(width: islandWidth, height: islandHeight, alignment: .top)
+        .clipShape(shape)
+        .contentShape(shape)
     }
 
     // MARK: - Collapsed wings
 
     private var collapsedStrip: some View {
         HStack(spacing: 0) {
-            HStack(spacing: 6) {
-                if let first = service.players.first {
-                    miniArt(first, size: 16)
-                    if first.isPlaying {
-                        LiveDot(color: tint(for: first))
-                    }
-                }
-                Spacer(minLength: 4)
-            }
-            .frame(maxWidth: .infinity)
+            leftWing
+                .frame(width: collapsedWingWidth, height: viewModel.geometry.height)
 
+            // Exact camera cutout — wings never steal this space.
             Color.clear
-                .frame(width: max(viewModel.geometry.width - 4, 90))
+                .frame(width: viewModel.geometry.width, height: viewModel.geometry.height)
 
-            HStack(spacing: 6) {
-                Spacer(minLength: 4)
-                if service.players.count > 1, let second = service.players.last {
-                    if second.isPlaying {
-                        LiveDot(color: tint(for: second))
-                    }
-                    miniArt(second, size: 16)
-                } else if let first = service.players.first {
-                    miniAppIcon(first, size: 14)
+            rightWing
+                .frame(width: collapsedWingWidth, height: viewModel.geometry.height)
+        }
+        .frame(width: collapsedWidth, height: viewModel.geometry.height)
+    }
+
+    /// Artwork tucked against the left of the camera housing.
+    private var leftWing: some View {
+        HStack(spacing: 5) {
+            if let first = service.players.first {
+                miniArt(first, size: 18)
+                if first.isPlaying {
+                    LiveDot(color: tint(for: first))
                 }
             }
-            .frame(maxWidth: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 12)
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+        .padding(.leading, 10)
+        .padding(.trailing, 8)
+    }
+
+    /// App icon / second player tucked against the right of the camera housing.
+    private var rightWing: some View {
+        HStack(spacing: 5) {
+            if service.players.count > 1, let second = service.players.last {
+                if second.isPlaying {
+                    LiveDot(color: tint(for: second))
+                }
+                miniArt(second, size: 18)
+            } else if let first = service.players.first {
+                miniAppIcon(first, size: 16)
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .padding(.leading, 8)
+        .padding(.trailing, 10)
     }
 
     private func miniArt(_ item: NowPlayingItem, size: CGFloat) -> some View {
@@ -106,6 +164,7 @@ struct NotchNowPlayingRootView: View {
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+        .fixedSize()
     }
 
     private func miniAppIcon(_ item: NowPlayingItem, size: CGFloat) -> some View {
@@ -124,9 +183,10 @@ struct NotchNowPlayingRootView: View {
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+        .fixedSize()
     }
 
-    // MARK: - Expanded tray (compact single row)
+    // MARK: - Expanded tray
 
     private var expandedTray: some View {
         VStack(spacing: 6) {

@@ -103,6 +103,9 @@ public final class AudioEngineController: ObservableObject {
         var framesWithSignal: UInt64 = 0
         /// Empty string = System Default. Non-empty = specific device UID.
         var destinationKey: String = AudioEngineController.systemDefaultDestinationKey
+        private let meterLock = OSAllocatedUnfairLock()
+        /// Linear envelope (0…1), attack-fast / release-slow — not raw peak.
+        private var meterEnvelope: Float = 0
 
         init(pid: pid_t, maxFrames: Int = 4_096, ringCapacity: Int = 16_384) {
             self.pid = pid
@@ -115,6 +118,38 @@ public final class AudioEngineController: ObservableObject {
             let abl = AudioBufferList.allocate(maximumBuffers: 2)
             abl.unsafeMutablePointer.pointee.mNumberBuffers = 2
             self.pullABL = abl
+        }
+
+        /// Update loudness meter from a stereo buffer (RMS, not sample peak).
+        func noteMeterSamples(left: UnsafePointer<Float>, right: UnsafePointer<Float>, count: Int) {
+            guard count > 0 else { return }
+            var rmsL: Float = 0
+            var rmsR: Float = 0
+            vDSP_rmsqv(left, 1, &rmsL, vDSP_Length(count))
+            vDSP_rmsqv(right, 1, &rmsR, vDSP_Length(count))
+            let rms = max(rmsL, rmsR)
+
+            meterLock.withLock {
+                // Fast attack so the bar rises with the music; slower release so it falls smoothly.
+                if rms >= meterEnvelope {
+                    meterEnvelope = rms
+                } else {
+                    meterEnvelope = meterEnvelope * 0.88 + rms * 0.12
+                }
+                // Noise gate: near-silence / tap floor collapses to empty (avoids a stuck half bar).
+                if meterEnvelope < 0.0035 { // ≈ −49 dBFS
+                    meterEnvelope *= 0.55
+                    if meterEnvelope < 0.0004 {
+                        meterEnvelope = 0
+                    }
+                }
+            }
+        }
+
+        func peakLeveldB() -> Float {
+            let env = meterLock.withLock { meterEnvelope }
+            guard env > 1e-6 else { return -60 }
+            return max(-60, min(0, 20 * log10(env)))
         }
 
         deinit {
@@ -490,6 +525,15 @@ public final class AudioEngineController: ObservableObject {
 
     public func hasEQOverride(pid: pid_t) -> Bool {
         eqOverrideTable.get(pid) != nil
+    }
+
+    /// Per-stream peak levels in dBFS for UI meters / silent-app filtering.
+    public func snapshotPeakLevels() -> [pid_t: Float] {
+        var result: [pid_t: Float] = [:]
+        for stream in streamContexts {
+            result[stream.pid] = stream.peakLeveldB()
+        }
+        return result
     }
 
     /// Drive per-app EQ meters from a single stream (`nil` clears focus).
@@ -1004,6 +1048,7 @@ private func streamInputCallback(
     var peak: Float = 0
     vDSP_maxmgv(stream.left, 1, &peak, vDSP_Length(frames))
     if peak > 1e-6 { stream.framesWithSignal &+= UInt64(frames) }
+    stream.noteMeterSamples(left: stream.left, right: stream.right, count: frames)
 
     stream.ring.write(left: stream.left, right: stream.right, count: frames)
     return noErr
@@ -1052,6 +1097,9 @@ private func mixOutputCallback(
         // Only process real samples — do not EQ/mix the zero-padded underrun tail.
         let n = got
 
+        // Meter from the mix pull (authoritative — always runs when audio is routed).
+        stream.noteMeterSamples(left: bus.tmpLeft, right: bus.tmpRight, count: n)
+
         ctx.mixer.applyStereo(
             pid: stream.pid,
             left: bus.tmpLeft,
@@ -1085,21 +1133,23 @@ private func mixOutputCallback(
         ctx.focusedSpectrum.push(samples: bus.tmpLeft, count: frames)
     }
 
+    // Global EQ meters: capture dry bus *before* EQ, then process, then full mix for visualizer.
+    if bus.isPrimary, meterThisBlock {
+        var half: Float = 0.5
+        vDSP_vasm(bus.globalLeft, 1, bus.globalRight, 1, &half, bus.tmpLeft, 1, vDSP_Length(frames))
+        ctx.spectrumInput.push(samples: bus.tmpLeft, count: frames)
+    }
+
     ctx.equalizer.processChannels(left: bus.globalLeft, right: bus.globalRight, frameCount: frames)
     vDSP_vadd(bus.mixLeft, 1, bus.globalLeft, 1, bus.mixLeft, 1, vDSP_Length(frames))
     vDSP_vadd(bus.mixRight, 1, bus.globalRight, 1, bus.mixRight, 1, vDSP_Length(frames))
-
-    if bus.isPrimary, meterThisBlock {
-        var half: Float = 0.5
-        vDSP_vasm(bus.mixLeft, 1, bus.mixRight, 1, &half, bus.tmpLeft, 1, vDSP_Length(frames))
-        ctx.spectrumInput.push(samples: bus.tmpLeft, count: frames)
-    }
 
     ctx.limiter.process(left: bus.mixLeft, right: bus.mixRight, frameCount: frames)
 
     if bus.isPrimary {
         ctx.levels.process(left: bus.mixLeft, right: bus.mixRight, frameCount: frames)
         if meterThisBlock {
+            // Post-EQ / post-mix (and limiter) — EQ fader “out” + Monitor visualizer.
             ctx.spectrum.push(samples: bus.mixLeft, count: frames)
         }
     }
