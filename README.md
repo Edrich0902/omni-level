@@ -14,7 +14,7 @@ OmniLevel sits in the menu bar (`LSUIElement` — no Dock icon). Click the wavef
 | **Per-app EQ** | Override the global curve per process; in/out band meters while editing |
 | **Monitor** | True-peak + crest, limiter GR, correlation, Mid/Side width, LUFS (M/S/I), loudness history, session stats |
 | **Visualizers** | Spectrum, Liquid, Mirror, 1/3-octave RTA, spectrogram, goniometer/scope — optional EQ curve overlay |
-| **Now Playing** | Popover transport + **Dynamic Island–style notch** island (hover expand, media remote / Spotify) |
+| **Now Playing** | Popover transport + **Dynamic Island–style notch** island (hover expand). Spotify via AppleScript; browsers/Music/etc via MediaRemote Adapter (works on macOS 15.4+) |
 | **Routing** | Core Audio process taps (including browser helpers e.g. Arc/Chrome/Safari), multi-destination output buses, global bypass |
 
 ## Requirements

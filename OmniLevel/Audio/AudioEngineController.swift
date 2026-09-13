@@ -2,6 +2,7 @@ import Accelerate
 import AudioToolbox
 import CoreAudio
 import Foundation
+import IOKit.ps
 import os
 
 /// Per-app process-tap capture → gain/pan → per-stream EQ → per-destination mix buses → speakers.
@@ -53,6 +54,8 @@ public final class AudioEngineController: ObservableObject {
     private var suppressDeviceRestart = false
     private var isStarting = false
     private var ioStatusTimer: Timer?
+    private var powerPollTimer: Timer?
+    private var lastBatteryState: Bool?
     private let log = Logger(subsystem: "com.omnilevel.app", category: "engine")
     private let spectrumFocusLock = OSAllocatedUnfairLock(initialState: pid_t(0))
 
@@ -295,6 +298,7 @@ public final class AudioEngineController: ObservableObject {
         outputDeviceName = devices.outputName()
         installDefaultOutputListener()
         installDeviceListListener()
+        installPowerSourceObserver()
     }
 
     // MARK: - Public
@@ -368,9 +372,9 @@ public final class AudioEngineController: ObservableObject {
         let liveKeys = Set(handles.map(\.pid))
 
         let rate = sampleRate > 0 ? sampleRate : ProcessTapIO.deviceSampleRate(preferredOutputDeviceID())
-        let bufferFrames: UInt32 = 512
+        let bufferFrames = Self.preferredIOBufferFrames()
         let asbd = Self.stereoFloatNonInterleavedASBD(sampleRate: rate)
-        let ringCap = Int(max(rate, 48_000) * 0.35)
+        let ringCap = Int(max(rate, 48_000) * 0.45)
 
         var nextStreams = streamContexts
         let removed = nextStreams.filter { !liveKeys.contains($0.pid) }
@@ -600,12 +604,12 @@ public final class AudioEngineController: ObservableObject {
         mixAnalyzer.setSampleRate(rate)
         eqOverrideTable.forEachDSP { $0.setSampleRate(rate) }
 
-        let bufferFrames: UInt32 = 512
+        let bufferFrames = Self.preferredIOBufferFrames()
         Self.trySetBufferFrames(outputID, frames: bufferFrames)
         Self.trySetSampleRate(outputID, rate: rate)
 
         let asbd = Self.stereoFloatNonInterleavedASBD(sampleRate: rate)
-        let ringCap = Int(rate * 0.35)
+        let ringCap = Int(rate * 0.45)
 
         var streams: [StreamContext] = []
         for handle in appTaps {
@@ -670,10 +674,22 @@ public final class AudioEngineController: ObservableObject {
             if let unit = bus.unit {
                 try OSStatusCheck(AudioOutputUnitStart(unit), "Start output \(bus.destinationKey)")
             }
-            let weakBus = bus
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.05) {
-                weakBus.capturePrimed = true
+            Self.primeCapture(bus: bus, shared: shared, minimumFrames: Int(bufferFrames))
+        }
+    }
+
+    /// Wait until rings hold ~1–2 buffers (or timeout) before mixing — reduces startup clicks / battery underruns.
+    private static func primeCapture(bus: OutputBusContext, shared: SharedMixState, minimumFrames: Int) {
+        let weakBus = bus
+        let target = max(512, minimumFrames)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let deadline = Date().addingTimeInterval(0.28)
+            while Date() < deadline {
+                let ready = shared.streams.contains { $0.ring.availableToRead >= target }
+                if ready { break }
+                Thread.sleep(forTimeInterval: 0.008)
             }
+            weakBus.capturePrimed = true
         }
     }
 
@@ -750,7 +766,7 @@ public final class AudioEngineController: ObservableObject {
         asbd: AudioStreamBasicDescription
     ) throws {
         Self.trySetSampleRate(deviceID, rate: sampleRate)
-        Self.trySetBufferFrames(deviceID, frames: 512)
+        Self.trySetBufferFrames(deviceID, frames: Self.preferredIOBufferFrames())
 
         let outUnit = try makeHALUnit()
         try setEnableIO(outUnit, input: false, output: true)
@@ -950,6 +966,38 @@ public final class AudioEngineController: ObservableObject {
         AudioObjectSetPropertyData(deviceID, &address, 0, nil, UInt32(MemoryLayout<UInt32>.size), &value)
     }
 
+    /// Larger HAL buffers on battery (~42 ms @ 48 kHz) to absorb CPU clock drops after unplug.
+    static func preferredIOBufferFrames() -> UInt32 {
+        isOnBatteryPower() ? 2048 : 1024
+    }
+
+    static func isOnBatteryPower() -> Bool {
+        guard let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
+              let list = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() as? [CFTypeRef]
+        else { return false }
+        for src in list {
+            guard let desc = IOPSGetPowerSourceDescription(blob, src)?.takeUnretainedValue() as? [String: Any],
+                  let state = desc[kIOPSPowerSourceStateKey] as? String
+            else { continue }
+            if state == kIOPSBatteryPowerValue { return true }
+        }
+        return false
+    }
+
+    /// Re-apply preferred buffer sizes without tearing down the graph (power transitions).
+    func refreshIOBufferSizesForPowerSource() {
+        let frames = Self.preferredIOBufferFrames()
+        let outputID = preferredOutputDeviceID()
+        Self.trySetBufferFrames(outputID, frames: frames)
+        for handle in processTaps.currentAppTaps() {
+            Self.trySetBufferFrames(handle.aggregateDeviceID, frames: frames)
+        }
+        for bus in outputBuses.values where bus.deviceID != kAudioObjectUnknown {
+            Self.trySetBufferFrames(bus.deviceID, frames: frames)
+        }
+        log.info("IO buffer → \(frames) frames (battery=\(Self.isOnBatteryPower()))")
+    }
+
     private static func deviceName(_ deviceID: AudioObjectID) -> String? {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioObjectPropertyName,
@@ -981,7 +1029,7 @@ public final class AudioEngineController: ObservableObject {
                     self.startSystemRouting(routedClusters: self.currentRoutedClusters())
                 }
                 self.debounceWorkItem = work
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
             }
         }
         AudioObjectAddPropertyListenerBlock(
@@ -1002,15 +1050,20 @@ public final class AudioEngineController: ObservableObject {
             DispatchQueue.main.async {
                 guard let self, !self.suppressDeviceRestart else { return }
                 self.debounceWorkItem?.cancel()
+                let previousDefault = self.selectedOutputDeviceID
                 let work = DispatchWorkItem { [weak self] in
                     guard let self else { return }
                     self.refreshDevices()
                     NotificationCenter.default.post(name: .omniLevelOutputDevicesDidChange, object: nil)
                     guard self.isRouting, !self.suppressDeviceRestart else { return }
+                    // Only full-restart when the default output actually changed.
+                    // Unrelated device list churn (common on AC↔battery) should not tear down the graph.
+                    let newDefault = self.preferredOutputDeviceID()
+                    guard newDefault != previousDefault, newDefault != kAudioObjectUnknown else { return }
                     self.startSystemRouting(routedClusters: self.currentRoutedClusters())
                 }
                 self.debounceWorkItem = work
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
             }
         }
         AudioObjectAddPropertyListenerBlock(
@@ -1019,6 +1072,24 @@ public final class AudioEngineController: ObservableObject {
             DispatchQueue.global(qos: .userInitiated),
             block
         )
+    }
+
+    private func installPowerSourceObserver() {
+        lastBatteryState = Self.isOnBatteryPower()
+        powerPollTimer?.invalidate()
+        // Poll lightly — Darwin power notifications are awkward from Swift and this is rare.
+        let timer = Timer(timeInterval: 8.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                let battery = Self.isOnBatteryPower()
+                guard battery != self.lastBatteryState else { return }
+                self.lastBatteryState = battery
+                guard self.isRouting else { return }
+                self.refreshIOBufferSizesForPowerSource()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        powerPollTimer = timer
     }
 
     func beginSuppressingDeviceRestarts() { suppressDeviceRestart = true }

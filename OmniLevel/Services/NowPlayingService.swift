@@ -242,12 +242,19 @@ final class NowPlayingService: ObservableObject {
         let position: TimeInterval?
         let duration: TimeInterval?
         let playbackRate: Double
+        let bundleIDHint: String?
+        let appNameHint: String?
     }
 
     private func fetchSystemNowPlaying(excludingSpotifyIfPresent: Bool) async -> NowPlayingItem? {
         guard MediaRemoteBridge.isAvailable else { return nil }
 
-        let snapshot: MediaRemoteSnapshot? = await timedFetch(seconds: 1.2) { () -> MediaRemoteSnapshot? in
+        let snapshot: MediaRemoteSnapshot? = await timedFetch(seconds: 1.6) { () -> MediaRemoteSnapshot? in
+            // Prefer one adapter round-trip on macOS 15.4+ (in-process MediaRemote is blocked).
+            if let adapted = MediaRemoteAdapterClient.fetchNowPlaying(includeArtwork: false) {
+                return Self.snapshot(fromAdapter: adapted)
+            }
+
             guard let info = MediaRemoteBridge.fetchNowPlayingInfoSync() else { return nil }
             let pid = MediaRemoteBridge.fetchApplicationPIDSync()
             let isPlaying = MediaRemoteBridge.fetchIsPlayingSync()
@@ -267,7 +274,7 @@ final class NowPlayingService: ObservableObject {
                 "kMRMediaRemoteNowPlayingInfoDuration", "Duration", "duration"
             ])
             let elapsed = MediaRemoteKeys.timeValue(info, keys: [
-                "kMRMediaRemoteNowPlayingInfoElapsedTime", "ElapsedTime", "elapsedTime"
+                "kMRMediaRemoteNowPlayingInfoElapsedTime", "ElapsedTime", "elapsedTime", "elapsedTimeNow"
             ])
             let rate = MediaRemoteKeys.doubleValue(info, keys: [
                 "kMRMediaRemoteNowPlayingInfoPlaybackRate", "PlaybackRate", "playbackRate"
@@ -282,25 +289,31 @@ final class NowPlayingService: ObservableObject {
                 artworkData: MediaRemoteKeys.artworkData(from: info),
                 position: elapsed,
                 duration: duration,
-                playbackRate: rate
+                playbackRate: rate,
+                bundleIDHint: nil,
+                appNameHint: nil
             )
         }
 
         guard let snapshot else { return nil }
 
-        var appName = "Now Playing"
-        var bundleID: String?
+        var appName = snapshot.appNameHint ?? "Now Playing"
+        var bundleID = snapshot.bundleIDHint
         var icon: NSImage?
 
         if let pid = snapshot.pid, let app = NSRunningApplication(processIdentifier: pid) {
             appName = app.localizedName ?? appName
-            bundleID = app.bundleIdentifier
+            bundleID = app.bundleIdentifier ?? bundleID
             icon = app.icon
 
             if excludingSpotifyIfPresent,
                bundleID == SpotifyController.bundleID || appName.localizedCaseInsensitiveContains("spotify") {
                 return nil
             }
+        } else if excludingSpotifyIfPresent,
+                  bundleID == SpotifyController.bundleID
+                    || (bundleID?.localizedCaseInsensitiveContains("spotify") == true) {
+            return nil
         }
 
         let displayName = friendlyAppName(appName: appName, bundleID: bundleID)
@@ -313,7 +326,6 @@ final class NowPlayingService: ObservableObject {
             } else if let img = NSImage(data: data) {
                 systemArtCache[key] = img
                 artwork = img
-                // Cap cache size
                 if systemArtCache.count > 24 {
                     systemArtCache.removeAll(keepingCapacity: true)
                 }
@@ -341,13 +353,61 @@ final class NowPlayingService: ObservableObject {
         )
     }
 
+    nonisolated private static func snapshot(fromAdapter dict: [String: Any]) -> MediaRemoteSnapshot? {
+        func string(_ key: String) -> String {
+            if let s = dict[key] as? String { return s }
+            if let n = dict[key] as? NSNumber { return n.stringValue }
+            return ""
+        }
+        func number(_ key: String) -> Double? {
+            if let d = dict[key] as? Double { return d }
+            if let n = dict[key] as? NSNumber { return n.doubleValue }
+            if let i = dict[key] as? Int { return Double(i) }
+            return nil
+        }
+        let title = string("title")
+        let artist = string("artist")
+        guard !title.isEmpty || !artist.isEmpty else { return nil }
+        let playing: Bool = {
+            if let b = dict["playing"] as? Bool { return b }
+            if let n = dict["playing"] as? NSNumber { return n.boolValue }
+            return (number("playbackRate") ?? 0) > 0.01
+        }()
+        let pid: pid_t? = {
+            if let n = dict["processIdentifier"] as? NSNumber { return pid_t(n.int32Value) }
+            if let i = dict["processIdentifier"] as? Int { return pid_t(i) }
+            return nil
+        }()
+        let elapsed = number("elapsedTimeNow") ?? number("elapsedTime")
+        var art: Data?
+        if let b64 = dict["artworkData"] as? String {
+            art = Data(base64Encoded: b64)
+        }
+        return MediaRemoteSnapshot(
+            title: title,
+            artist: artist,
+            album: string("album"),
+            isPlaying: playing,
+            pid: pid,
+            artworkData: art,
+            position: elapsed,
+            duration: number("duration"),
+            playbackRate: number("playbackRate") ?? (playing ? 1 : 0),
+            bundleIDHint: string("bundleIdentifier").nilIfEmpty
+                ?? string("parentApplicationBundleIdentifier").nilIfEmpty,
+            appNameHint: nil
+        )
+    }
+
     private func friendlyAppName(appName: String, bundleID: String?) -> String {
         let id = bundleID ?? ""
         if id.contains("chrome") || appName.localizedCaseInsensitiveContains("chrome") { return "Chrome" }
         if id.contains("safari") || appName.localizedCaseInsensitiveContains("safari") { return "Safari" }
         if id.contains("firefox") || appName.localizedCaseInsensitiveContains("firefox") { return "Firefox" }
         if id.contains("//microsoft.edgemac") || appName.localizedCaseInsensitiveContains("edge") { return "Edge" }
-        if id.contains("arc") || appName.localizedCaseInsensitiveContains("arc") { return "Arc" }
+        if id.contains("company.thebrowser") || id.hasSuffix(".Browser") || appName.localizedCaseInsensitiveContains("arc") {
+            return "Arc"
+        }
         if id.contains("brave") { return "Brave" }
         if id.contains("music") { return "Music" }
         return appName
@@ -376,6 +436,10 @@ private final class OnceResumeBox<T: Sendable>: @unchecked Sendable {
         didResume = true
         continuation.resume(returning: value)
     }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 
 // MARK: - MediaRemote dictionary helpers

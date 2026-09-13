@@ -20,3 +20,6 @@ xcuserdata/
 *.p12
 *.mobileprovision
 .env
+
+# Vendored MediaRemote adapter build tree (ship prebuilt framework under OmniLevel/Resources)
+Vendor/mediaremote-adapter/build/

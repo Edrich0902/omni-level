@@ -62,6 +62,8 @@
 		C1MIXER001BF00000000001 /* MixerStateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1MIXER001FR00000000001 /* MixerStateStore.swift */; };
 		C1APPLIST001BF00000000001 /* AppListStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1APPLIST001FR00000000001 /* AppListStore.swift */; };
 		C1MIXANAL001BF00000000001 /* MixAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1MIXANAL001FR00000000001 /* MixAnalyzer.swift */; };
+		C1MRADAPT001BF00000000001 /* MediaRemoteAdapterClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1MRADAPT001FR00000000001 /* MediaRemoteAdapterClient.swift */; };
+		C1MRRES001BF00000000001 /* MediaRemoteAdapter in Resources */ = {isa = PBXBuildFile; fileRef = C1MRRES001FR00000000001 /* MediaRemoteAdapter */; };
 		C1PEREQ002BF00000000002 /* PerAppEQSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1PEREQ002FR00000000002 /* PerAppEQSheet.swift */; };
 /* End PBXBuildFile section */
 
@@ -125,6 +127,8 @@
 		C1MIXER001FR00000000001 /* MixerStateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MixerStateStore.swift; sourceTree = "<group>"; };
 		C1APPLIST001FR00000000001 /* AppListStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppListStore.swift; sourceTree = "<group>"; };
 		C1MIXANAL001FR00000000001 /* MixAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MixAnalyzer.swift; sourceTree = "<group>"; };
+		C1MRADAPT001FR00000000001 /* MediaRemoteAdapterClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaRemoteAdapterClient.swift; sourceTree = "<group>"; };
+		C1MRRES001FR00000000001 /* MediaRemoteAdapter */ = {isa = PBXFileReference; lastKnownFileType = folder; path = MediaRemoteAdapter; sourceTree = "<group>"; };
 		C1PEREQ002FR00000000002 /* PerAppEQSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerAppEQSheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -230,6 +234,7 @@
 			isa = PBXGroup;
 			children = (
 				FD425773B7224002A1F815B4 /* Presets */,
+				C1MRRES001FR00000000001 /* MediaRemoteAdapter */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -255,6 +260,7 @@
 				C1APPLIST001FR00000000001 /* AppListStore.swift */,
 				217A55CD95C4404BA3C78AE1 /* ProcessIdentity.swift */,
 				C1NOWPLAY002FR00000000002 /* MediaRemoteBridge.swift */,
+				C1MRADAPT001FR00000000001 /* MediaRemoteAdapterClient.swift */,
 				C1NOWPLAY003FR00000000003 /* SpotifyController.swift */,
 				C1NOWPLAY004FR00000000004 /* NowPlayingService.swift */,
 				C1AUTOEQ001FR00000000001 /* AutoEQLibraryService.swift */,
@@ -364,6 +370,7 @@
 			files = (
 				D4A2DF2A09F541FCB19F50FA /* Assets.xcassets in Resources */,
 				5F8F2AE1D14D45B9ABDA1C88 /* flat.json in Resources */,
+				C1MRRES001BF00000000001 /* MediaRemoteAdapter in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -419,6 +426,7 @@
 				C1MIXER001BF00000000001 /* MixerStateStore.swift in Sources */,
 				C1APPLIST001BF00000000001 /* AppListStore.swift in Sources */,
 				C1MIXANAL001BF00000000001 /* MixAnalyzer.swift in Sources */,
+				C1MRADAPT001BF00000000001 /* MediaRemoteAdapterClient.swift in Sources */,
 				C1PEREQ002BF00000000002 /* PerAppEQSheet.swift in Sources */,
 				15DEB2CEFCF948B4BA18D9FC /* DSPValidation.swift in Sources */,
 			);

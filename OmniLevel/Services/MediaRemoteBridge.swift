@@ -1,7 +1,8 @@
 import AppKit
 import Foundation
 
-/// Soft-loads private MediaRemote symbols for system Now Playing (browsers, Music, …).
+/// Soft-loads private MediaRemote symbols, with a bundled adapter fallback for macOS 15.4+
+/// where in-process MediaRemote is entitlement-blocked (Spotify still works via AppleScript).
 enum MediaRemoteBridge {
     enum Command: UInt32 {
         case play = 0
@@ -27,7 +28,9 @@ enum MediaRemoteBridge {
         return unsafeBitCast(ptr, to: T.self)
     }
 
-    static var isAvailable: Bool { handle != nil }
+    static var isAvailable: Bool {
+        handle != nil || MediaRemoteAdapterClient.isBundled
+    }
 
     private typealias GetInfoFn = @convention(c) (
         DispatchQueue,
@@ -46,8 +49,18 @@ enum MediaRemoteBridge {
         @escaping @convention(block) (Bool) -> Void
     ) -> Void
 
-    /// Blocking fetch on a background queue (call off main if needed).
+    /// Blocking fetch. Prefers direct MediaRemote; falls back to the perl adapter on nil.
     static func fetchNowPlayingInfoSync() -> NSDictionary? {
+        if let direct = fetchNowPlayingInfoDirect(), direct.count > 0 {
+            return direct
+        }
+        if let adapted = MediaRemoteAdapterClient.fetchNowPlaying(includeArtwork: false) {
+            return adapted as NSDictionary
+        }
+        return nil
+    }
+
+    private static func fetchNowPlayingInfoDirect() -> NSDictionary? {
         guard let fn: GetInfoFn = sym("MRMediaRemoteGetNowPlayingInfo") else { return nil }
         let sem = DispatchSemaphore(value: 0)
         nonisolated(unsafe) var result: NSDictionary?
@@ -62,45 +75,65 @@ enum MediaRemoteBridge {
     }
 
     static func fetchApplicationPIDSync() -> pid_t? {
-        guard let fn: GetAppPIDFn = sym("MRMediaRemoteGetNowPlayingApplicationPID") else { return nil }
-        let sem = DispatchSemaphore(value: 0)
-        nonisolated(unsafe) var result: pid_t?
-        fn(DispatchQueue.global(qos: .userInitiated)) { pid in
-            result = pid == 0 ? nil : pid_t(pid)
-            sem.signal()
+        if let fn: GetAppPIDFn = sym("MRMediaRemoteGetNowPlayingApplicationPID") {
+            let sem = DispatchSemaphore(value: 0)
+            nonisolated(unsafe) var result: pid_t?
+            fn(DispatchQueue.global(qos: .userInitiated)) { pid in
+                result = pid == 0 ? nil : pid_t(pid)
+                sem.signal()
+            }
+            _ = sem.wait(timeout: .now() + 0.4)
+            if let result { return result }
         }
-        _ = sem.wait(timeout: .now() + 0.4)
-        return result
+        // Adapter payload may include processIdentifier.
+        if let dict = MediaRemoteAdapterClient.fetchNowPlaying(includeArtwork: false) {
+            if let n = dict["processIdentifier"] as? NSNumber { return pid_t(n.int32Value) }
+            if let i = dict["processIdentifier"] as? Int { return pid_t(i) }
+        }
+        return nil
     }
 
     static func fetchIsPlayingSync() -> Bool {
-        guard let fn: GetIsPlayingFn = sym("MRMediaRemoteGetNowPlayingApplicationIsPlaying") else {
-            return false
+        if let fn: GetIsPlayingFn = sym("MRMediaRemoteGetNowPlayingApplicationIsPlaying") {
+            let sem = DispatchSemaphore(value: 0)
+            nonisolated(unsafe) var result = false
+            fn(DispatchQueue.global(qos: .userInitiated)) { playing in
+                result = playing
+                sem.signal()
+            }
+            _ = sem.wait(timeout: .now() + 0.4)
+            // If direct returned true, trust it; if false, still check adapter
+            // (direct often lies / returns default false when blocked).
+            if result { return true }
         }
-        let sem = DispatchSemaphore(value: 0)
-        nonisolated(unsafe) var result = false
-        fn(DispatchQueue.global(qos: .userInitiated)) { playing in
-            result = playing
-            sem.signal()
+        if let dict = MediaRemoteAdapterClient.fetchNowPlaying(includeArtwork: false) {
+            if let b = dict["playing"] as? Bool { return b }
+            if let n = dict["playing"] as? NSNumber { return n.boolValue }
         }
-        _ = sem.wait(timeout: .now() + 0.4)
-        return result
+        return false
     }
 
     @discardableResult
     static func send(_ command: Command) -> Bool {
-        guard let fn: SendCommandFn = sym("MRMediaRemoteSendCommand") else { return false }
-        return fn(command.rawValue, nil)
+        if let fn: SendCommandFn = sym("MRMediaRemoteSendCommand"),
+           fn(command.rawValue, nil) {
+            return true
+        }
+        return MediaRemoteAdapterClient.send(commandID: command.rawValue)
     }
 
-    /// Seek to an absolute timeline position in seconds (best-effort private API).
+    /// Seek to an absolute timeline position in seconds (best-effort).
     @discardableResult
     static func seek(to seconds: TimeInterval) -> Bool {
-        guard let fn: SendCommandFn = sym("MRMediaRemoteSendCommand") else { return false }
-        let options: NSDictionary = [
-            "kMRMediaRemoteOptionPlaybackPosition": seconds as NSNumber,
-            "MRMediaRemoteOptionPlaybackPosition": seconds as NSNumber
-        ]
-        return fn(Command.changePlaybackPosition.rawValue, options as CFDictionary)
+        if let fn: SendCommandFn = sym("MRMediaRemoteSendCommand") {
+            let options: NSDictionary = [
+                "kMRMediaRemoteOptionPlaybackPosition": seconds as NSNumber,
+                "MRMediaRemoteOptionPlaybackPosition": seconds as NSNumber
+            ]
+            if fn(Command.changePlaybackPosition.rawValue, options as CFDictionary) {
+                return true
+            }
+        }
+        return MediaRemoteAdapterClient.seek(toSeconds: seconds)
     }
 }

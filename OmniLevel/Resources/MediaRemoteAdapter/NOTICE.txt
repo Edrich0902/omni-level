@@ -1,0 +1,4 @@
+MediaRemote Adapter (https://github.com/ungive/mediaremote-adapter)
+Copyright (c) 2025 Jonas van den Berg and contributors
+Licensed under the BSD 3-Clause License (see LICENSE).
+Bundled as a helper invoked via /usr/bin/perl — not linked into OmniLevel.
