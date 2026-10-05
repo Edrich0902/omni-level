@@ -252,6 +252,12 @@ public final class ProcessTapIO: @unchecked Sendable {
         return Array(Set(pids)).sorted()
     }
 
+    /// PIDs that currently have a Core Audio process object, from the shared snapshot.
+    /// Use for "is this tappable?" checks; one call replaces a coreaudiod round-trip per PID.
+    public static func audioProcessPIDSet() -> Set<pid_t> {
+        Set(audioProcessTable().map(\.pid))
+    }
+
     private static func findProcessObjectByEnumerating(pid: pid_t) -> AudioObjectID? {
         audioProcessTable().first(where: { $0.pid == pid })?.objectID
     }

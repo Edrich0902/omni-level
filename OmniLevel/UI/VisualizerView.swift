@@ -50,14 +50,8 @@ struct VisualizerView: View {
     /// so the header and mode picker are never rebuilt by meter ticks.
     @StateObject private var live = MonitorLive()
 
-    private var bars: [Float] { live.bars }
-    private var peaks: [Float] { live.peaks }
-    private var rtaBars: [Float] { live.rtaBars }
     private var mix: MixAnalyzer.Snapshot { live.mix }
     private var gr: AutoPreAmpLimiter.GRSnapshot { live.gr }
-    private var gonio: [MixAnalyzer.GoniometerPoint] { live.gonio }
-    private var spectroColumns: [[Float]] { live.spectroColumns }
-    private var eqCurve: [(frequency: Float, magnitudedB: Float)] { live.eqCurve }
 
     private let barCount = 40
     private let spectroWidth = 96
@@ -67,14 +61,14 @@ struct VisualizerView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 header
-                LiveTimeline { meterDashboard }
+                meterDashboard
                 modeChrome
                 LiveTimeline {
                     spectrumSurface
                         .frame(maxWidth: .infinity)
                         .frame(height: 200)
                 }
-                LiveTimeline {
+                LiveTimeline(minimumInterval: 0.1) {
                     loudnessHistory
                         .frame(height: 56)
                 }
@@ -174,7 +168,16 @@ struct VisualizerView: View {
 
     // MARK: - Dashboard
 
+    /// Moving bars redraw at display rate; numeric readouts at 10 Hz (still readable, far
+    /// less text layout).
     private var meterDashboard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            LiveTimeline { meterBars }
+            LiveTimeline(minimumInterval: 0.1) { meterReadouts }
+        }
+    }
+
+    private var meterBars: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 channelMeter(label: "L", rms: live.smoothL, peak: live.smoothPeakL, tp: live.smoothTPL)
@@ -188,7 +191,11 @@ struct VisualizerView: View {
                 correlationMeter
             }
             .frame(height: 28)
+        }
+    }
 
+    private var meterReadouts: some View {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 compactStat(title: "M/S", value: String(format: "%.0f/%.0f", mix.midPercent, mix.sidePercent))
                 compactStat(title: "Width", value: String(format: "%.0f%%", mix.width))
@@ -336,7 +343,16 @@ struct VisualizerView: View {
     // MARK: - Main surface
 
     private var spectrumSurface: some View {
-        Canvas { context, size in
+        // Captured by value: a Canvas only redraws when its renderer's captures change.
+        let frame = SurfaceFrame(
+            bars: live.bars,
+            peaks: live.peaks,
+            rtaBars: live.rtaBars,
+            spectroColumns: live.spectroColumns,
+            gonio: live.gonio,
+            eqCurve: live.eqCurve
+        )
+        return Canvas { context, size in
             let bounds = CGRect(origin: .zero, size: size)
             context.fill(
                 Path(roundedRect: bounds, cornerRadius: 14, style: .continuous),
@@ -345,21 +361,21 @@ struct VisualizerView: View {
 
             switch mode {
             case .spectrum:
-                drawSpectrum(context: context, size: size)
+                drawSpectrum(context: context, size: size, frame: frame)
             case .liquid:
-                drawLiquid(context: context, size: size)
+                drawLiquid(context: context, size: size, frame: frame)
             case .mirror:
-                drawMirror(context: context, size: size)
+                drawMirror(context: context, size: size, frame: frame)
             case .rta:
-                drawRTA(context: context, size: size)
+                drawRTA(context: context, size: size, frame: frame)
             case .spectrogram:
-                drawSpectrogram(context: context, size: size)
+                drawSpectrogram(context: context, size: size, frame: frame)
             case .scope:
-                drawGoniometer(context: context, size: size)
+                drawGoniometer(context: context, size: size, frame: frame)
             }
 
             if showEQCurve, mode.supportsEQOverlay {
-                drawEQOverlay(context: context, size: size)
+                drawEQOverlay(context: context, size: size, frame: frame)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -383,8 +399,8 @@ struct VisualizerView: View {
                 .font(.system(size: 9, weight: .bold, design: .rounded))
                 .foregroundStyle(OmniTheme.accent)
             }
+            let hist = mix.loudnessHistory
             Canvas { context, size in
-                let hist = mix.loudnessHistory
                 context.fill(
                     Path(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: 10, style: .continuous),
                     with: .color(Color.black.opacity(0.2))
@@ -462,7 +478,9 @@ struct VisualizerView: View {
 
     // MARK: - Draw modes
 
-    private func drawSpectrum(context: GraphicsContext, size: CGSize) {
+    private func drawSpectrum(context: GraphicsContext, size: CGSize, frame f: SurfaceFrame) {
+        let bars = f.bars
+        let peaks = f.peaks
         let count = bars.count
         guard count > 0 else { return }
         let inset: CGFloat = 10
@@ -496,7 +514,8 @@ struct VisualizerView: View {
         }
     }
 
-    private func drawLiquid(context: GraphicsContext, size: CGSize) {
+    private func drawLiquid(context: GraphicsContext, size: CGSize, frame f: SurfaceFrame) {
+        let bars = f.bars
         guard bars.count > 1 else { return }
         let inset: CGFloat = 8
         let maxH = size.height - 24
@@ -528,7 +547,8 @@ struct VisualizerView: View {
         context.stroke(path, with: .color(OmniTheme.accent.opacity(0.9)), style: StrokeStyle(lineWidth: 1.75, lineCap: .round, lineJoin: .round))
     }
 
-    private func drawMirror(context: GraphicsContext, size: CGSize) {
+    private func drawMirror(context: GraphicsContext, size: CGSize, frame f: SurfaceFrame) {
+        let bars = f.bars
         let count = bars.count
         guard count > 0 else { return }
         let inset: CGFloat = 12
@@ -556,7 +576,8 @@ struct VisualizerView: View {
         }
     }
 
-    private func drawRTA(context: GraphicsContext, size: CGSize) {
+    private func drawRTA(context: GraphicsContext, size: CGSize, frame f: SurfaceFrame) {
+        let rtaBars = f.rtaBars
         let count = rtaBars.count
         guard count > 0 else { return }
         let inset: CGFloat = 8
@@ -573,8 +594,8 @@ struct VisualizerView: View {
         }
     }
 
-    private func drawSpectrogram(context: GraphicsContext, size: CGSize) {
-        let cols = spectroColumns
+    private func drawSpectrogram(context: GraphicsContext, size: CGSize, frame f: SurfaceFrame) {
+        let cols = f.spectroColumns
         guard !cols.isEmpty else { return }
         let colW = size.width / CGFloat(spectroWidth)
         let rowH = size.height / CGFloat(spectroBins)
@@ -600,7 +621,8 @@ struct VisualizerView: View {
         )
     }
 
-    private func drawGoniometer(context: GraphicsContext, size: CGSize) {
+    private func drawGoniometer(context: GraphicsContext, size: CGSize, frame f: SurfaceFrame) {
+        let gonio = f.gonio
         let inset: CGFloat = 16
         let side = min(size.width, size.height) - inset * 2
         let origin = CGPoint(x: (size.width - side) / 2, y: (size.height - side) / 2)
@@ -634,7 +656,8 @@ struct VisualizerView: View {
         )
     }
 
-    private func drawEQOverlay(context: GraphicsContext, size: CGSize) {
+    private func drawEQOverlay(context: GraphicsContext, size: CGSize, frame f: SurfaceFrame) {
+        let eqCurve = f.eqCurve
         guard eqCurve.count > 1 else { return }
         let inset: CGFloat = 10
         var path = Path()
@@ -756,6 +779,16 @@ struct VisualizerView: View {
 }
 
 // MARK: - Live state
+
+/// Value snapshot of the visualizer data for one Canvas draw.
+private struct SurfaceFrame {
+    var bars: [Float]
+    var peaks: [Float]
+    var rtaBars: [Float]
+    var spectroColumns: [[Float]]
+    var gonio: [MixAnalyzer.GoniometerPoint]
+    var eqCurve: [(frequency: Float, magnitudedB: Float)]
+}
 
 /// Display-rate Monitor data, written by the ticker and read by the `LiveTimeline`
 /// sections. Never publishes, so ticks don't rebuild the rest of the view.

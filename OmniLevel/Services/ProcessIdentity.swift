@@ -150,8 +150,12 @@ public final class ProcessIdentity: Sendable {
     public func tapAudioPIDs(
         for main: NSRunningApplication,
         related: [pid_t]? = nil,
-        resolvingProcessObject: (pid_t) -> Bool = { ProcessTapIO.audioProcessObjectID(for: $0) != nil }
+        resolvingProcessObject: ((pid_t) -> Bool)? = nil
     ) -> [pid_t] {
+        let resolvingProcessObject = resolvingProcessObject ?? {
+            let audioPIDs = ProcessTapIO.audioProcessPIDSet()
+            return { audioPIDs.contains($0) }
+        }()
         let mainPID = main.processIdentifier
         var relatedPIDs = Set(related ?? self.relatedPIDs(for: main))
 
