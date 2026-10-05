@@ -36,12 +36,12 @@ Grant these in **System Settings → Privacy & Security** (app ⋯ menu → Priv
 ```bash
 open OmniLevel.xcodeproj
 # or
-xcodebuild -project OmniLevel.xcodeproj -scheme OmniLevel -configuration Debug \
-  -destination 'platform=macOS,arch=arm64' -derivedDataPath ./DerivedData build
-open ./DerivedData/Build/Products/Debug/OmniLevel.app
+xcodebuild -project OmniLevel.xcodeproj -scheme OmniLevel -configuration Release \
+  -destination 'platform=macOS,arch=arm64' -derivedDataPath ./DerivedData.noindex build
+open ./DerivedData.noindex/Build/Products/Release/OmniLevel.app
 ```
 
-For day-to-day testing, install a signed copy to `/Applications/OmniLevel.app` (optional).
+Build into a `.noindex` folder so Spotlight doesn't list every build as another OmniLevel. For day-to-day use, install a signed copy to `/Applications/OmniLevel.app`. Use Release builds for listening: Debug builds are unoptimized and can glitch under CPU load.
 
 ## Usage
 

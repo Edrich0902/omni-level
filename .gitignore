@@ -1,5 +1,6 @@
-# Xcode
+# Xcode (.noindex keeps build copies of the app out of Spotlight)
 DerivedData/
+DerivedData.noindex/
 build/
 *.xcuserstate
 xcuserdata/
