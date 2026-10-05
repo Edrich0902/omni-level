@@ -8,9 +8,10 @@ struct NowPlayingSeekBar: View {
 
     @State private var isDragging = false
     @State private var dragFraction: Double = 0
+    @Environment(\.liveUpdatesEnabled) private var liveUpdatesEnabled
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: item.isPlaying && !isDragging ? 0.5 : 120)) { context in
+        TimelineView(.periodic(from: .now, by: item.isPlaying && !isDragging && liveUpdatesEnabled ? 0.5 : 120)) { context in
             let live = item.livePosition(at: context.date)
             let duration = item.duration ?? 0
             let fraction = isDragging

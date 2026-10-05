@@ -71,8 +71,9 @@ struct ContentView: View {
     @State private var appSearch = ""
     @AppStorage("omniLevel.hideSilentApps") private var hideSilentApps = false
     @State private var silentSince: [pid_t: Date] = [:]
-    /// Local copy refreshed by TimelineView so Apps VU redraws inside the menu-bar popover.
-    @State private var appsLiveLevels: [pid_t: Float] = [:]
+    /// On apps that have been quiet past the grace period; changes only on transitions.
+    @State private var quietHidden: Set<pid_t> = []
+    @Environment(\.liveUpdatesEnabled) private var liveUpdatesEnabled
     @StateObject private var perAppEQEditorHolder = PerAppEQEditorHolder()
     @State private var newGroupDraft = ""
     @State private var pendingNewGroupBundleID: String?
@@ -99,16 +100,12 @@ struct ContentView: View {
         let searched = searchedApps
         let searching = !appSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         guard hideSilentApps, !searching else { return searched }
-        let now = Date()
         return searched.filter { node in
             // Only hide apps we can meter (On / through OmniLevel).
             guard node.isTapped else { return true }
             // Muted On apps count as quiet.
             if node.isMuted { return false }
-            let level = appsLiveLevels[node.id] ?? tapManager.liveLeveldB(for: node.id)
-            if level >= -42 { return true }
-            guard let since = silentSince[node.id] else { return true }
-            return now.timeIntervalSince(since) < 0.8
+            return !quietHidden.contains(node.id)
         }
     }
 
@@ -307,12 +304,6 @@ struct ContentView: View {
         .onChange(of: tapManager.runningAppAudioNodes) { _, _ in
             refreshSilentTracking()
         }
-        .onChange(of: tapManager.liveLevelsdB) { _, _ in
-            refreshSilentTracking()
-        }
-        .onReceive(Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()) { _ in
-            refreshSilentTracking()
-        }
     }
 
     private func refreshSilentTracking() {
@@ -320,7 +311,7 @@ struct ContentView: View {
         var next = silentSince
         let alive = Set(tapManager.runningAppAudioNodes.map(\.id))
         for node in tapManager.runningAppAudioNodes {
-            let level = appsLiveLevels[node.id] ?? tapManager.liveLeveldB(for: node.id)
+            let level = tapManager.liveLeveldB(for: node.id)
             if !node.isTapped || node.isMuted || level >= -42 {
                 next.removeValue(forKey: node.id)
             } else if next[node.id] == nil {
@@ -330,6 +321,10 @@ struct ContentView: View {
         next = next.filter { alive.contains($0.key) }
         if next != silentSince {
             silentSince = next
+        }
+        let hidden = Set(next.filter { now.timeIntervalSince($0.value) >= 0.8 }.keys)
+        if hidden != quietHidden {
+            quietHidden = hidden
         }
     }
 
@@ -812,17 +807,18 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        // Popover won't reliably redraw from Timer/@Published — same pattern as EQ fader meters.
+        // Drives the level feed (only the meter leaf views observe it) and drag polling.
+        // Runs only while the Apps pane is on screen in an open popover.
         .background {
             TimelineView(
                 .animation(
                     minimumInterval: dragSession.draggingBundleID == nil ? 1.0 / 30.0 : 1.0 / 60.0,
-                    paused: false
+                    paused: !liveUpdatesEnabled
                 )
             ) { timeline in
                 Color.clear
                     .onChange(of: timeline.date) { _, _ in
-                        appsLiveLevels = tapManager.pumpLiveLevels()
+                        tapManager.pumpLiveLevels()
                         refreshSilentTracking()
                         dragSession.endIfMouseReleased()
                         if dragSession.draggingBundleID != nil {
@@ -830,7 +826,7 @@ struct ContentView: View {
                         }
                     }
                     .onAppear {
-                        appsLiveLevels = tapManager.pumpLiveLevels()
+                        tapManager.pumpLiveLevels()
                     }
             }
         }
@@ -1037,7 +1033,7 @@ struct ContentView: View {
 
         return AppVolumeCard(
             node: node,
-            leveldB: appsLiveLevels[node.id] ?? tapManager.liveLeveldB(for: node.id),
+            levelFeed: tapManager.liveLevels,
             outputDevices: engine.devices.outputDevices,
             isFavorite: favorited,
             canOrganize: canOrganize,

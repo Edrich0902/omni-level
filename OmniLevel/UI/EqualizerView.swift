@@ -23,14 +23,11 @@ struct EqualizerView: View {
     @State private var importError: String?
     @State private var showSaveSheet = false
     @State private var newPresetName = ""
-    @State private var inputLevels: [CGFloat] = Array(repeating: 0, count: EqualizerDSP.bandCount)
-    @State private var outputLevels: [CGFloat] = Array(repeating: 0, count: EqualizerDSP.bandCount)
-    @State private var lastTick: Date = .now
-    @State private var curveSpectrumPost: [Float] = Array(repeating: -80, count: 48)
-    @State private var curveSpectrumPre: [Float] = Array(repeating: -80, count: 48)
+    /// Live meter data. Not observed here — only the meter / underlay leaf views observe it,
+    /// so meter ticks never rebuild the header, curve, sliders or controls.
+    @StateObject private var live = EQLiveMeters()
 
     private let sliderHeight: CGFloat = 180
-    private let curveSpectrumBarCount = 48
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -43,15 +40,13 @@ struct EqualizerView: View {
         .padding(16)
         .glassCard(cornerRadius: 20)
         .background {
-            // ~18 Hz is plenty for fader meters; less FFT + @State thrash.
-            TimelineView(.animation(minimumInterval: 1.0 / 18.0, paused: false)) { timeline in
-                Color.clear
-                    .onChange(of: timeline.date) { _, date in
-                        tickSpectrum(at: date)
-                    }
-            }
+            EQMeterTicker(
+                live: live,
+                input: meterSpectrumInput ?? engine.spectrumInput,
+                output: meterSpectrum ?? engine.spectrum,
+                engine: engine
+            )
         }
-        .onAppear { tickSpectrum(at: .now) }
         .fileImporter(
             isPresented: $showImporter,
             allowedContentTypes: [.commaSeparatedText, .plainText, .utf8PlainText],
@@ -132,12 +127,26 @@ struct EqualizerView: View {
     }
 
     private var curveCanvas: some View {
+        ZStack {
+            // Live spectrum underlay (pre ghost + post fill) on the same log-frequency axis.
+            EQSpectrumUnderlay(feed: live.spectrum)
+            curveShape
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.black.opacity(0.25))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(OmniTheme.strokeSoft, lineWidth: 1)
+                }
+        }
+    }
+
+    /// Gridlines, target, response curve and band nodes; redraws only when the EQ changes.
+    private var curveShape: some View {
         let points = viewModel.magnitudePoints(count: 120)
         return Canvas { context, size in
-            // Live spectrum underlay (pre ghost + post fill) on the same log-frequency axis.
-            drawSpectrumUnderlay(context: context, size: size, values: curveSpectrumPre, color: OmniTheme.accent.opacity(0.12))
-            drawSpectrumUnderlay(context: context, size: size, values: curveSpectrumPost, color: OmniTheme.amber.opacity(0.22))
-
             // Faint gridlines
             for db in stride(from: -24, through: 24, by: 12) {
                 let y = yPosition(db: Float(db), height: size.height)
@@ -187,45 +196,6 @@ struct EqualizerView: View {
                 context.stroke(Path(ellipseIn: rect), with: .color(OmniTheme.accent.opacity(0.8)), lineWidth: 1)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .background {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.black.opacity(0.25))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(OmniTheme.strokeSoft, lineWidth: 1)
-                }
-        }
-    }
-
-    private func drawSpectrumUnderlay(
-        context: GraphicsContext,
-        size: CGSize,
-        values: [Float],
-        color: Color
-    ) {
-        guard values.count > 1 else { return }
-        let count = values.count
-        var path = Path()
-        for i in 0..<count {
-            let t = Float(i) / Float(count - 1)
-            let freq = 20 * pow(1000, t) // 20…20k log
-            let x = xPosition(freq: freq, width: size.width)
-            // Map −72…0 dBFS into lower 55% of canvas height (under the ±24 dB curve)
-            let unit = max(0, min(1, (values[i] + 72) / 72))
-            let y = size.height - CGFloat(unit) * size.height * 0.55
-            if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
-            else { path.addLine(to: CGPoint(x: x, y: y)) }
-        }
-        var fill = path
-        if let last = values.indices.last {
-            let t = Float(last) / Float(max(count - 1, 1))
-            let freq = 20 * pow(1000, t)
-            fill.addLine(to: CGPoint(x: xPosition(freq: freq, width: size.width), y: size.height))
-            fill.addLine(to: CGPoint(x: 0, y: size.height))
-            fill.closeSubpath()
-            context.fill(fill, with: .color(color))
-        }
     }
 
     private var bandSliders: some View {
@@ -245,10 +215,10 @@ struct EqualizerView: View {
                             set: { viewModel.updateGain(at: index, value: Float($0)) }
                         ),
                         range: Double(EqualizerBand.gainRange.lowerBound)...Double(EqualizerBand.gainRange.upperBound),
-                        trackHeight: sliderHeight,
-                        inputLevel: index < inputLevels.count ? inputLevels[index] : 0,
-                        outputLevel: index < outputLevels.count ? outputLevels[index] : 0
-                    )
+                        trackHeight: sliderHeight
+                    ) {
+                        EQBandMeter(feed: live.bands, index: index)
+                    }
                     .frame(maxWidth: .infinity)
 
                     Text(band.frequencyLabel)
@@ -261,59 +231,6 @@ struct EqualizerView: View {
         }
         .frame(height: sliderHeight + 40)
         .padding(.vertical, 4)
-    }
-
-    /// Sample pre/post EQ energy at each band centre for the fader meters.
-    private func tickSpectrum(at date: Date) {
-        let dt = Float(min(0.12, max(1.0 / 30.0, date.timeIntervalSince(lastTick))))
-        lastTick = date
-        let freqs = EqualizerBand.standardFrequencies
-        let rate = engine.sampleRate
-        let inputAnalyzer = meterSpectrumInput ?? engine.spectrumInput
-        let outputAnalyzer = meterSpectrum ?? engine.spectrum
-        let rawIn = inputAnalyzer.levelsNearFrequencies(freqs, sampleRate: rate, dt: dt)
-        let rawOut = outputAnalyzer.levelsNearFrequencies(freqs, sampleRate: rate, dt: dt)
-        // Only publish @State when meters moved enough (avoids full 16-slider body).
-        let nextIn = rawIn.map { CGFloat(dbToUnit($0)) }
-        let nextOut = rawOut.map { CGFloat(dbToUnit($0)) }
-        if levelsDiffer(inputLevels, nextIn) { inputLevels = nextIn }
-        if levelsDiffer(outputLevels, nextOut) { outputLevels = nextOut }
-
-        // Curve underlay from raw FFT — do not call logBars (that fights Monitor display state).
-        curveSpectrumPre = logSpectrumUnderlay(from: inputAnalyzer, count: curveSpectrumBarCount)
-        curveSpectrumPost = logSpectrumUnderlay(from: outputAnalyzer, count: curveSpectrumBarCount)
-    }
-
-    private func logSpectrumUnderlay(from analyzer: SpectrumAnalyzer, count: Int) -> [Float] {
-        let mags = analyzer.magnitudeColumn()
-        guard count > 0, !mags.isEmpty else { return Array(repeating: -80, count: count) }
-        var out = [Float](repeating: -80, count: count)
-        let usable = max(1, SpectrumAnalyzer.binCount - 1)
-        for i in 0..<count {
-            let t0 = Float(i) / Float(count)
-            let t1 = Float(i + 1) / Float(count)
-            let b0 = 1 + Int(pow(Float(usable), t0))
-            let b1 = max(b0 + 1, 1 + Int(pow(Float(usable), t1)))
-            var peak: Float = -80
-            for b in b0..<min(b1, mags.count) {
-                peak = max(peak, mags[b])
-            }
-            out[i] = peak
-        }
-        return out
-    }
-
-    private func levelsDiffer(_ a: [CGFloat], _ b: [CGFloat]) -> Bool {
-        guard a.count == b.count else { return true }
-        for i in a.indices where abs(a[i] - b[i]) > 0.012 {
-            return true
-        }
-        return false
-    }
-
-    private func dbToUnit(_ db: Float) -> Float {
-        let clamped = max(-70, min(0, db))
-        return pow((clamped + 70) / 70, 0.82)
     }
 
     private var controlsRow: some View {
@@ -417,10 +334,7 @@ struct EqualizerView: View {
     }
 
     private func xPosition(freq: Float, width: CGFloat) -> CGFloat {
-        let fMin: Float = 20
-        let fMax: Float = 20_000
-        let t = log(max(freq, fMin) / fMin) / log(fMax / fMin)
-        return CGFloat(t) * width
+        eqCurveX(freq: freq, width: width)
     }
 
     private func yPosition(db: Float, height: CGFloat) -> CGFloat {
@@ -456,5 +370,179 @@ struct EqualizerView: View {
             viewModel.applyPreset(preset)
         }
         newPresetName = ""
+    }
+}
+
+/// Log-frequency x position (20 Hz … 20 kHz) shared by the curve and its spectrum underlay.
+private func eqCurveX(freq: Float, width: CGFloat) -> CGFloat {
+    let fMin: Float = 20
+    let fMax: Float = 20_000
+    let t = log(max(freq, fMin) / fMin) / log(fMax / fMin)
+    return CGFloat(t) * width
+}
+
+// MARK: - Live meters
+
+/// Owns the EQ pane's live data. Never publishes itself; its two feeds are observed only by
+/// the small views that draw them.
+@MainActor
+final class EQLiveMeters: ObservableObject {
+    let bands = EQBandMeterFeed()
+    let spectrum = EQSpectrumFeed()
+    private var lastTick: Date = .now
+    private static let underlayBarCount = 48
+
+    /// One FFT per analyzer per tick: band levels run `analyze()`, the underlay reuses it.
+    func tick(at date: Date, input: SpectrumAnalyzer, output: SpectrumAnalyzer, sampleRate: Double) {
+        let dt = Float(min(0.12, max(1.0 / 60.0, date.timeIntervalSince(lastTick))))
+        lastTick = date
+        let freqs = EqualizerBand.standardFrequencies
+        let rawIn = input.levelsNearFrequencies(freqs, sampleRate: sampleRate, dt: dt)
+        let rawOut = output.levelsNearFrequencies(freqs, sampleRate: sampleRate, dt: dt)
+        bands.update(
+            input: rawIn.map { CGFloat(Self.dbToUnit($0)) },
+            output: rawOut.map { CGFloat(Self.dbToUnit($0)) }
+        )
+        spectrum.update(
+            pre: Self.logBins(input.latestMagnitudes()),
+            post: Self.logBins(output.latestMagnitudes())
+        )
+    }
+
+    private static func logBins(_ mags: [Float]) -> [Float] {
+        let count = underlayBarCount
+        guard !mags.isEmpty else { return Array(repeating: -80, count: count) }
+        var out = [Float](repeating: -80, count: count)
+        let usable = max(1, SpectrumAnalyzer.binCount - 1)
+        for i in 0..<count {
+            let t0 = Float(i) / Float(count)
+            let t1 = Float(i + 1) / Float(count)
+            let b0 = 1 + Int(pow(Float(usable), t0))
+            let b1 = max(b0 + 1, 1 + Int(pow(Float(usable), t1)))
+            var peak: Float = -80
+            for b in b0..<min(b1, mags.count) {
+                peak = max(peak, mags[b])
+            }
+            out[i] = peak
+        }
+        return out
+    }
+
+    private static func dbToUnit(_ db: Float) -> Float {
+        let clamped = max(-70, min(0, db))
+        return pow((clamped + 70) / 70, 0.82)
+    }
+}
+
+@MainActor
+final class EQBandMeterFeed: ObservableObject {
+    struct Levels {
+        var input = [CGFloat](repeating: 0, count: EqualizerDSP.bandCount)
+        var output = [CGFloat](repeating: 0, count: EqualizerDSP.bandCount)
+    }
+
+    @Published private(set) var levels = Levels()
+
+    func update(input: [CGFloat], output: [CGFloat]) {
+        guard Self.differ(levels.input, input) || Self.differ(levels.output, output) else { return }
+        levels = Levels(input: input, output: output)
+    }
+
+    private static func differ(_ a: [CGFloat], _ b: [CGFloat]) -> Bool {
+        guard a.count == b.count else { return true }
+        for i in a.indices where abs(a[i] - b[i]) > 0.008 {
+            return true
+        }
+        return false
+    }
+}
+
+@MainActor
+final class EQSpectrumFeed: ObservableObject {
+    struct Bins {
+        var pre = [Float](repeating: -80, count: 48)
+        var post = [Float](repeating: -80, count: 48)
+    }
+
+    @Published private(set) var bins = Bins()
+
+    func update(pre: [Float], post: [Float]) {
+        guard Self.differ(bins.pre, pre) || Self.differ(bins.post, post) else { return }
+        bins = Bins(pre: pre, post: post)
+    }
+
+    private static func differ(_ a: [Float], _ b: [Float]) -> Bool {
+        guard a.count == b.count else { return true }
+        for i in a.indices where abs(a[i] - b[i]) > 0.5 {
+            return true
+        }
+        return false
+    }
+}
+
+/// Drives `EQLiveMeters` at display rate while the EQ pane is on screen in an open popover.
+private struct EQMeterTicker: View {
+    let live: EQLiveMeters
+    let input: SpectrumAnalyzer
+    let output: SpectrumAnalyzer
+    let engine: AudioEngineController
+    @Environment(\.liveUpdatesEnabled) private var liveUpdatesEnabled
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !liveUpdatesEnabled)) { timeline in
+            Color.clear
+                .onChange(of: timeline.date) { _, date in
+                    live.tick(at: date, input: input, output: output, sampleRate: engine.sampleRate)
+                }
+        }
+        .onAppear {
+            live.tick(at: .now, input: input, output: output, sampleRate: engine.sampleRate)
+        }
+    }
+}
+
+private struct EQBandMeter: View {
+    @ObservedObject var feed: EQBandMeterFeed
+    let index: Int
+
+    var body: some View {
+        let levels = feed.levels
+        GainSliderMeterBars(
+            inputLevel: index < levels.input.count ? levels.input[index] : 0,
+            outputLevel: index < levels.output.count ? levels.output[index] : 0
+        )
+    }
+}
+
+private struct EQSpectrumUnderlay: View {
+    @ObservedObject var feed: EQSpectrumFeed
+
+    var body: some View {
+        let bins = feed.bins
+        Canvas { context, size in
+            Self.draw(context: context, size: size, values: bins.pre, color: OmniTheme.accent.opacity(0.12))
+            Self.draw(context: context, size: size, values: bins.post, color: OmniTheme.amber.opacity(0.22))
+        }
+        .allowsHitTesting(false)
+    }
+
+    private static func draw(context: GraphicsContext, size: CGSize, values: [Float], color: Color) {
+        guard values.count > 1 else { return }
+        let count = values.count
+        var path = Path()
+        for i in 0..<count {
+            let t = Float(i) / Float(count - 1)
+            let freq = 20 * pow(1000, t) // 20…20k log
+            let x = eqCurveX(freq: freq, width: size.width)
+            // Map −72…0 dBFS into lower 55% of canvas height (under the ±24 dB curve)
+            let unit = max(0, min(1, (values[i] + 72) / 72))
+            let y = size.height - CGFloat(unit) * size.height * 0.55
+            if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
+            else { path.addLine(to: CGPoint(x: x, y: y)) }
+        }
+        path.addLine(to: CGPoint(x: size.width, y: size.height))
+        path.addLine(to: CGPoint(x: 0, y: size.height))
+        path.closeSubpath()
+        context.fill(path, with: .color(color))
     }
 }

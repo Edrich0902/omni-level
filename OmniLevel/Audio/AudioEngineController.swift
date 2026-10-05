@@ -45,6 +45,7 @@ public final class AudioEngineController: ObservableObject {
     public let focusedSpectrumInput = SpectrumAnalyzer()
     public let processTaps = ProcessTapIO()
     public let devices = AudioDeviceManager()
+    private let analysisPump: AnalysisPump
 
     private var sharedMix: SharedMixState?
     private var outputBuses: [String: OutputBusContext] = [:]
@@ -168,13 +169,10 @@ public final class AudioEngineController: ObservableObject {
     final class SharedMixState: @unchecked Sendable {
         let equalizer: EqualizerDSP
         let limiter: AutoPreAmpLimiter
-        let levels: AudioLevels
-        let mixAnalyzer: MixAnalyzer
-        let spectrum: SpectrumAnalyzer
-        let spectrumInput: SpectrumAnalyzer
-        let focusedSpectrum: SpectrumAnalyzer
-        let focusedSpectrumInput: SpectrumAnalyzer
+        let analysis: AnalysisPump
         let mixer: GainPanMixer
+        /// Jitter cushion kept queued per stream on top of one output buffer.
+        let cushionFrames: Int
         private let streamsLock = OSAllocatedUnfairLock()
         private var streamsStorage: [StreamContext]
         private let overridesLock = OSAllocatedUnfairLock()
@@ -186,13 +184,9 @@ public final class AudioEngineController: ObservableObject {
         init(
             equalizer: EqualizerDSP,
             limiter: AutoPreAmpLimiter,
-            levels: AudioLevels,
-            mixAnalyzer: MixAnalyzer,
-            spectrum: SpectrumAnalyzer,
-            spectrumInput: SpectrumAnalyzer,
-            focusedSpectrum: SpectrumAnalyzer,
-            focusedSpectrumInput: SpectrumAnalyzer,
+            analysis: AnalysisPump,
             mixer: GainPanMixer,
+            cushionFrames: Int,
             streams: [StreamContext],
             overrides: [pid_t: EqualizerDSP],
             focusPID: pid_t = 0,
@@ -200,13 +194,9 @@ public final class AudioEngineController: ObservableObject {
         ) {
             self.equalizer = equalizer
             self.limiter = limiter
-            self.levels = levels
-            self.mixAnalyzer = mixAnalyzer
-            self.spectrum = spectrum
-            self.spectrumInput = spectrumInput
-            self.focusedSpectrum = focusedSpectrum
-            self.focusedSpectrumInput = focusedSpectrumInput
+            self.analysis = analysis
             self.mixer = mixer
+            self.cushionFrames = cushionFrames
             self.streamsStorage = streams
             self.overridesStorage = overrides
             self.focusPIDStorage = focusPID
@@ -255,10 +245,11 @@ public final class AudioEngineController: ObservableObject {
         /// Accumulates streams that use the shared global EQ (processed once per buffer).
         var globalLeft: UnsafeMutablePointer<Float>
         var globalRight: UnsafeMutablePointer<Float>
+        /// This bus's own filter memory for the shared global EQ.
+        let globalEQState = EqualizerDSP.RenderState()
         let maxFrames: Int
         var capturePrimed = false
         var outputCallbacks: UInt64 = 0
-        var spectrumStride: UInt32 = 0
         var unit: AudioComponentInstance?
         var deviceID: AudioObjectID = kAudioObjectUnknown
 
@@ -292,6 +283,13 @@ public final class AudioEngineController: ObservableObject {
     }
 
     public init() {
+        analysisPump = AnalysisPump(
+            mixAnalyzer: mixAnalyzer,
+            spectrum: spectrum,
+            spectrumInput: spectrumInput,
+            focusedSpectrum: focusedSpectrum,
+            focusedSpectrumInput: focusedSpectrumInput
+        )
         selectedInputDeviceID = devices.selectedInputID
         selectedOutputDeviceID = devices.selectedOutputID
         inputDeviceName = devices.inputName()
@@ -390,6 +388,7 @@ public final class AudioEngineController: ObservableObject {
             // Keep EQ override DSP warm — app may re-route (solo / On-Off) shortly.
         }
         nextStreams.removeAll { !liveKeys.contains($0.pid) }
+        Self.releaseLater(removed)
 
         let existing = Set(nextStreams.map(\.pid))
         for pid in liveKeys.sorted() where !existing.contains(pid) {
@@ -450,6 +449,7 @@ public final class AudioEngineController: ObservableObject {
         stopIOStatusPoll()
         teardownUnits()
         processTaps.destroyAllAppTaps()
+        analysisPump.stop()
         sharedMix = nil
         streamContexts = []
         activeStreamCount = 0
@@ -528,6 +528,7 @@ public final class AudioEngineController: ObservableObject {
     }
 
     public func clearAllEQOverrides() {
+        Self.releaseLater(Array(eqOverrideTable.snapshot().values))
         eqOverrideTable.removeAll()
         publishOverrides()
     }
@@ -553,7 +554,19 @@ public final class AudioEngineController: ObservableObject {
     }
 
     private func removeEQOverride(pid: pid_t) {
+        if let dsp = eqOverrideTable.get(pid) { Self.releaseLater(dsp) }
         eqOverrideTable.remove(pid)
+    }
+
+    /// The render thread may still hold the last reference to objects just removed
+    /// from the mix state; keep them alive briefly so their deinit never runs there.
+    private static func releaseLater<T: Sendable>(_ object: T) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { _ = object }
+    }
+
+    /// ~20 ms of queued audio per stream absorbs late capture cycles under CPU load.
+    nonisolated static func jitterCushionFrames(sampleRate: Double) -> Int {
+        max(256, Int(sampleRate * 0.02))
     }
 
     private func publishOverrides() {
@@ -602,6 +615,7 @@ public final class AudioEngineController: ObservableObject {
         equalizer.setSampleRate(rate)
         limiter.setSampleRate(rate)
         mixAnalyzer.setSampleRate(rate)
+        analysisPump.setSampleRate(rate)
         eqOverrideTable.forEachDSP { $0.setSampleRate(rate) }
 
         let bufferFrames = Self.preferredIOBufferFrames()
@@ -648,18 +662,15 @@ public final class AudioEngineController: ObservableObject {
         let shared = SharedMixState(
             equalizer: equalizer,
             limiter: limiter,
-            levels: levels,
-            mixAnalyzer: mixAnalyzer,
-            spectrum: spectrum,
-            spectrumInput: spectrumInput,
-            focusedSpectrum: focusedSpectrum,
-            focusedSpectrumInput: focusedSpectrumInput,
+            analysis: analysisPump,
             mixer: mixer,
+            cushionFrames: Self.jitterCushionFrames(sampleRate: rate),
             streams: streams,
             overrides: overrides,
             focusPID: focusPID
         )
         sharedMix = shared
+        analysisPump.start()
 
         try syncOutputBuses(shared: shared, asbd: asbd)
 
@@ -1165,12 +1176,17 @@ private func mixOutputCallback(
 
     let focusPID = ctx.focusPID
     var fedFocus = false
-    bus.spectrumStride &+= 1
-    let meterThisBlock = (bus.spectrumStride & 3) == 0
+    let analysis = ctx.analysis
 
     // Per stream: gain/pan, then either dedicated override EQ or accumulate for one global EQ pass.
+    // Analysis taps below only copy into rings; all metering math runs on the analysis queue.
     for stream in ctx.streams where stream.destinationKey == bus.destinationKey {
-        let got = stream.ring.read(left: bus.tmpLeft, right: bus.tmpRight, count: frames)
+        let got = stream.ring.readForPlayback(
+            left: bus.tmpLeft,
+            right: bus.tmpRight,
+            count: frames,
+            cushionFrames: ctx.cushionFrames
+        )
         guard got > 0 else { continue }
         // Only process real samples — do not EQ/mix the zero-padded underrun tail.
         let n = got
@@ -1186,15 +1202,15 @@ private func mixOutputCallback(
         )
 
         let isFocus = focusPID != 0 && stream.pid == focusPID
-        if isFocus, meterThisBlock {
-            ctx.focusedSpectrumInput.push(samples: bus.tmpLeft, count: n)
+        if isFocus {
+            analysis.focusPre.tryWrite(left: bus.tmpLeft, right: bus.tmpLeft, count: n)
             fedFocus = true
         }
 
         if let overrideEQ = ctx.overrideEqualizer(for: stream.pid) {
             overrideEQ.processChannels(left: bus.tmpLeft, right: bus.tmpRight, frameCount: n)
-            if isFocus, meterThisBlock {
-                ctx.focusedSpectrum.push(samples: bus.tmpLeft, count: n)
+            if isFocus {
+                analysis.focusPost.tryWrite(left: bus.tmpLeft, right: bus.tmpLeft, count: n)
             }
             vDSP_vadd(bus.mixLeft, 1, bus.tmpLeft, 1, bus.mixLeft, 1, vDSP_Length(n))
             vDSP_vadd(bus.mixRight, 1, bus.tmpRight, 1, bus.mixRight, 1, vDSP_Length(n))
@@ -1205,32 +1221,33 @@ private func mixOutputCallback(
     }
 
     // Focused app silent → meters decay to empty (don't show other apps' energy).
-    if focusPID != 0, !fedFocus, meterThisBlock {
+    if focusPID != 0, !fedFocus {
         memset(bus.tmpLeft, 0, frames * 4)
-        ctx.focusedSpectrumInput.push(samples: bus.tmpLeft, count: frames)
-        ctx.focusedSpectrum.push(samples: bus.tmpLeft, count: frames)
+        analysis.focusPre.tryWrite(left: bus.tmpLeft, right: bus.tmpLeft, count: frames)
+        analysis.focusPost.tryWrite(left: bus.tmpLeft, right: bus.tmpLeft, count: frames)
     }
 
     // Global EQ meters: capture dry bus *before* EQ, then process, then full mix for visualizer.
-    if bus.isPrimary, meterThisBlock {
+    if bus.isPrimary {
         var half: Float = 0.5
         vDSP_vasm(bus.globalLeft, 1, bus.globalRight, 1, &half, bus.tmpLeft, 1, vDSP_Length(frames))
-        ctx.spectrumInput.push(samples: bus.tmpLeft, count: frames)
+        analysis.preEQ.tryWrite(left: bus.tmpLeft, right: bus.tmpLeft, count: frames)
     }
 
-    ctx.equalizer.processChannels(left: bus.globalLeft, right: bus.globalRight, frameCount: frames)
+    ctx.equalizer.processChannels(
+        left: bus.globalLeft,
+        right: bus.globalRight,
+        frameCount: frames,
+        state: bus.globalEQState
+    )
     vDSP_vadd(bus.mixLeft, 1, bus.globalLeft, 1, bus.mixLeft, 1, vDSP_Length(frames))
     vDSP_vadd(bus.mixRight, 1, bus.globalRight, 1, bus.mixRight, 1, vDSP_Length(frames))
 
     ctx.limiter.process(left: bus.mixLeft, right: bus.mixRight, frameCount: frames)
 
     if bus.isPrimary {
-        ctx.levels.process(left: bus.mixLeft, right: bus.mixRight, frameCount: frames)
-        ctx.mixAnalyzer.process(left: bus.mixLeft, right: bus.mixRight, frameCount: frames)
-        if meterThisBlock {
-            // Post-EQ / post-mix (and limiter) — EQ fader “out” + Monitor visualizer.
-            ctx.spectrum.push(samples: bus.mixLeft, count: frames)
-        }
+        // Post-EQ / post-mix (and limiter) — Monitor analyzers + EQ fader “out”.
+        analysis.postMix.tryWrite(left: bus.mixLeft, right: bus.mixRight, count: frames)
     }
 
     let byteSize = UInt32(frames * 4)

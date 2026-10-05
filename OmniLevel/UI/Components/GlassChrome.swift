@@ -238,39 +238,22 @@ struct SectionLabel: View {
     }
 }
 
-/// Tall custom vertical gain fader for precise EQ control.
-struct VerticalGainSlider: View {
-    @Binding var value: Double
-    var range: ClosedRange<Double> = -24...24
-    var trackHeight: CGFloat = 168
+/// Pre/post band energy bars drawn inside a `VerticalGainSlider` track.
+struct GainSliderMeterBars: View {
     /// 0...1 program energy pre-EQ at this band.
-    var inputLevel: CGFloat = 0
+    var inputLevel: CGFloat
     /// 0...1 program energy post-EQ at this band.
-    var outputLevel: CGFloat = 0
+    var outputLevel: CGFloat
 
     var body: some View {
         GeometryReader { geo in
             let h = geo.size.height
-            let t = (value - range.lowerBound) / (range.upperBound - range.lowerBound)
-            let y = h * (1 - CGFloat(t))
-            let mid = h / 2
-            let trackW: CGFloat = 10
             let cx = geo.size.width / 2
-
+            // Cool / warm so they never fight the mint gain control.
+            let inH = max(0, h * min(1, max(0, inputLevel)) * 0.92)
+            let outH = max(0, h * min(1, max(0, outputLevel)) * 0.92)
+            let barW: CGFloat = 3
             ZStack {
-                // Track well
-                Capsule()
-                    .fill(Color.black.opacity(0.38))
-                    .frame(width: trackW + 2)
-                    .overlay {
-                        Capsule()
-                            .strokeBorder(OmniTheme.strokeSoft, lineWidth: 1)
-                    }
-
-                // Live meters — cool / warm so they never fight the mint gain control.
-                let inH = max(0, h * min(1, max(0, inputLevel)) * 0.92)
-                let outH = max(0, h * min(1, max(0, outputLevel)) * 0.92)
-                let barW: CGFloat = 3
                 // Input (pre-EQ) — left, cool blue
                 Capsule()
                     .fill(
@@ -302,6 +285,40 @@ struct VerticalGainSlider: View {
                     .frame(width: barW, height: outH > 1 ? outH : 0)
                     .position(x: cx + 3.2, y: h - outH / 2)
                     .opacity(outH > 2 ? 0.95 : 0)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// Tall custom vertical gain fader for precise EQ control.
+/// `meter` is drawn inside the track, under the gain fill and thumb.
+struct VerticalGainSlider<Meter: View>: View {
+    @Binding var value: Double
+    var range: ClosedRange<Double> = -24...24
+    var trackHeight: CGFloat = 168
+    @ViewBuilder var meter: () -> Meter
+
+    var body: some View {
+        GeometryReader { geo in
+            let h = geo.size.height
+            let t = (value - range.lowerBound) / (range.upperBound - range.lowerBound)
+            let y = h * (1 - CGFloat(t))
+            let mid = h / 2
+            let trackW: CGFloat = 10
+            let cx = geo.size.width / 2
+
+            ZStack {
+                // Track well
+                Capsule()
+                    .fill(Color.black.opacity(0.38))
+                    .frame(width: trackW + 2)
+                    .overlay {
+                        Capsule()
+                            .strokeBorder(OmniTheme.strokeSoft, lineWidth: 1)
+                    }
+
+                meter()
 
                 // Gain fill (mint) — control only, sits above meters
                 let fillTop = min(y, mid)

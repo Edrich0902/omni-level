@@ -27,6 +27,7 @@
 		04C3CDF2CE934C4F92AA7147 /* AppVolumeCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8E3DFF9D0904E00ACA0AAD6 /* AppVolumeCard.swift */; };
 		22D86FC72E684306A209C06D /* GlassChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE013232538942E1A6021F27 /* GlassChrome.swift */; };
 		42EB3D01B470467AB26EDB18 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0386425AEB4EAEA4B19442 /* ContentView.swift */; };
+		C1POPVIS0001BF0000000001 /* PopoverVisibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1POPVIS0001FR0000000001 /* PopoverVisibility.swift */; };
 		79D020956EC14DC28E0BB161 /* EqualizerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A3827083A1E47FA861AF8F5 /* EqualizerView.swift */; };
 		BC80AA18DD3C4F5E8D60A869 /* EqualizerViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E15F14FC5C87417F82F84DFF /* EqualizerViewModel.swift */; };
 		1C7F3DD6B0C2403D975F491F /* VisualizerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA12410F83E042BF9911384B /* VisualizerView.swift */; };
@@ -49,11 +50,6 @@
 		C1NOWPLAY003BF00000000003 /* SpotifyController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1NOWPLAY003FR00000000003 /* SpotifyController.swift */; };
 		C1NOWPLAY004BF00000000004 /* NowPlayingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1NOWPLAY004FR00000000004 /* NowPlayingService.swift */; };
 		C1NOWPLAY005BF00000000005 /* NowPlayingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1NOWPLAY005FR00000000005 /* NowPlayingView.swift */; };
-		C1NOTCH001BF00000000001 /* NotchPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1NOTCH001FR00000000001 /* NotchPanel.swift */; };
-		C1NOTCH002BF00000000002 /* NotchGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1NOTCH002FR00000000002 /* NotchGeometry.swift */; };
-		C1NOTCH003BF00000000003 /* NotchShape.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1NOTCH003FR00000000003 /* NotchShape.swift */; };
-		C1NOTCH004BF00000000004 /* NotchNowPlayingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1NOTCH004FR00000000004 /* NotchNowPlayingController.swift */; };
-		C1NOTCH005BF00000000005 /* NotchNowPlayingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1NOTCH005FR00000000005 /* NotchNowPlayingView.swift */; };
 		C1SEEK001BF00000000001 /* NowPlayingSeekBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1SEEK001FR00000000001 /* NowPlayingSeekBar.swift */; };
 		C1AUTOEQ001BF00000000001 /* AutoEQLibraryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1AUTOEQ001FR00000000001 /* AutoEQLibraryService.swift */; };
 		C1AUTOEQ002BF00000000002 /* AutoEQLibrarySheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1AUTOEQ002FR00000000002 /* AutoEQLibrarySheet.swift */; };
@@ -62,6 +58,7 @@
 		C1MIXER001BF00000000001 /* MixerStateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1MIXER001FR00000000001 /* MixerStateStore.swift */; };
 		C1APPLIST001BF00000000001 /* AppListStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1APPLIST001FR00000000001 /* AppListStore.swift */; };
 		C1MIXANAL001BF00000000001 /* MixAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1MIXANAL001FR00000000001 /* MixAnalyzer.swift */; };
+		C1ANPUMP0001BF0000000001 /* AnalysisPump.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1ANPUMP0001FR0000000001 /* AnalysisPump.swift */; };
 		C1MRADAPT001BF00000000001 /* MediaRemoteAdapterClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1MRADAPT001FR00000000001 /* MediaRemoteAdapterClient.swift */; };
 		C1MRRES001BF00000000001 /* MediaRemoteAdapter in Resources */ = {isa = PBXBuildFile; fileRef = C1MRRES001FR00000000001 /* MediaRemoteAdapter */; };
 		C1PEREQ002BF00000000002 /* PerAppEQSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1PEREQ002FR00000000002 /* PerAppEQSheet.swift */; };
@@ -90,6 +87,7 @@
 		C8E3DFF9D0904E00ACA0AAD6 /* AppVolumeCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppVolumeCard.swift; sourceTree = "<group>"; };
 		AE013232538942E1A6021F27 /* GlassChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassChrome.swift; sourceTree = "<group>"; };
 		AB0386425AEB4EAEA4B19442 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		C1POPVIS0001FR0000000001 /* PopoverVisibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PopoverVisibility.swift; sourceTree = "<group>"; };
 		3A3827083A1E47FA861AF8F5 /* EqualizerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EqualizerView.swift; sourceTree = "<group>"; };
 		E15F14FC5C87417F82F84DFF /* EqualizerViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EqualizerViewModel.swift; sourceTree = "<group>"; };
 		FA12410F83E042BF9911384B /* VisualizerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualizerView.swift; sourceTree = "<group>"; };
@@ -114,11 +112,6 @@
 		C1NOWPLAY003FR00000000003 /* SpotifyController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpotifyController.swift; sourceTree = "<group>"; };
 		C1NOWPLAY004FR00000000004 /* NowPlayingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingService.swift; sourceTree = "<group>"; };
 		C1NOWPLAY005FR00000000005 /* NowPlayingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingView.swift; sourceTree = "<group>"; };
-		C1NOTCH001FR00000000001 /* NotchPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchPanel.swift; sourceTree = "<group>"; };
-		C1NOTCH002FR00000000002 /* NotchGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchGeometry.swift; sourceTree = "<group>"; };
-		C1NOTCH003FR00000000003 /* NotchShape.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchShape.swift; sourceTree = "<group>"; };
-		C1NOTCH004FR00000000004 /* NotchNowPlayingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchNowPlayingController.swift; sourceTree = "<group>"; };
-		C1NOTCH005FR00000000005 /* NotchNowPlayingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchNowPlayingView.swift; sourceTree = "<group>"; };
 		C1SEEK001FR00000000001 /* NowPlayingSeekBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingSeekBar.swift; sourceTree = "<group>"; };
 		C1AUTOEQ001FR00000000001 /* AutoEQLibraryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoEQLibraryService.swift; sourceTree = "<group>"; };
 		C1AUTOEQ002FR00000000002 /* AutoEQLibrarySheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoEQLibrarySheet.swift; sourceTree = "<group>"; };
@@ -127,6 +120,7 @@
 		C1MIXER001FR00000000001 /* MixerStateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MixerStateStore.swift; sourceTree = "<group>"; };
 		C1APPLIST001FR00000000001 /* AppListStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppListStore.swift; sourceTree = "<group>"; };
 		C1MIXANAL001FR00000000001 /* MixAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MixAnalyzer.swift; sourceTree = "<group>"; };
+		C1ANPUMP0001FR0000000001 /* AnalysisPump.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisPump.swift; sourceTree = "<group>"; };
 		C1MRADAPT001FR00000000001 /* MediaRemoteAdapterClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaRemoteAdapterClient.swift; sourceTree = "<group>"; };
 		C1MRRES001FR00000000001 /* MediaRemoteAdapter */ = {isa = PBXFileReference; lastKnownFileType = folder; path = MediaRemoteAdapter; sourceTree = "<group>"; };
 		C1PEREQ002FR00000000002 /* PerAppEQSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerAppEQSheet.swift; sourceTree = "<group>"; };
@@ -202,6 +196,7 @@
 		F06DBB8B01944D52A56FA6F3 /* Audio */ = {
 			isa = PBXGroup;
 			children = (
+				C1ANPUMP0001FR0000000001 /* AnalysisPump.swift */,
 				CFDCB062810443A39C6FD4A0 /* AppAudioTapManager.swift */,
 				BD3CAD5B56E24876BD922658 /* AudioEngineController.swift */,
 				D1B57AB7D20341319E01EB50 /* AudioLevels.swift */,
@@ -274,27 +269,15 @@
 				C8E3DFF9D0904E00ACA0AAD6 /* AppVolumeCard.swift */,
 				D154B42710F94498BEE044C6 /* Components */,
 				AB0386425AEB4EAEA4B19442 /* ContentView.swift */,
+				C1POPVIS0001FR0000000001 /* PopoverVisibility.swift */,
 				3A3827083A1E47FA861AF8F5 /* EqualizerView.swift */,
 				E15F14FC5C87417F82F84DFF /* EqualizerViewModel.swift */,
 				C1PEREQ002FR00000000002 /* PerAppEQSheet.swift */,
-				C1NOTCH000GR00000000000 /* Notch */,
 				C1NOWPLAY005FR00000000005 /* NowPlayingView.swift */,
 				C1AUTOEQ002FR00000000002 /* AutoEQLibrarySheet.swift */,
 				FA12410F83E042BF9911384B /* VisualizerView.swift */,
 			);
 			path = UI;
-			sourceTree = "<group>";
-		};
-		C1NOTCH000GR00000000000 /* Notch */ = {
-			isa = PBXGroup;
-			children = (
-				C1NOTCH001FR00000000001 /* NotchPanel.swift */,
-				C1NOTCH002FR00000000002 /* NotchGeometry.swift */,
-				C1NOTCH003FR00000000003 /* NotchShape.swift */,
-				C1NOTCH004FR00000000004 /* NotchNowPlayingController.swift */,
-				C1NOTCH005FR00000000005 /* NotchNowPlayingView.swift */,
-			);
-			path = Notch;
 			sourceTree = "<group>";
 		};
 		D154B42710F94498BEE044C6 /* Components */ = {
@@ -405,6 +388,7 @@
 				04C3CDF2CE934C4F92AA7147 /* AppVolumeCard.swift in Sources */,
 				22D86FC72E684306A209C06D /* GlassChrome.swift in Sources */,
 				42EB3D01B470467AB26EDB18 /* ContentView.swift in Sources */,
+				C1POPVIS0001BF0000000001 /* PopoverVisibility.swift in Sources */,
 				79D020956EC14DC28E0BB161 /* EqualizerView.swift in Sources */,
 				BC80AA18DD3C4F5E8D60A869 /* EqualizerViewModel.swift in Sources */,
 				1C7F3DD6B0C2403D975F491F /* VisualizerView.swift in Sources */,
@@ -413,11 +397,6 @@
 				C1NOWPLAY003BF00000000003 /* SpotifyController.swift in Sources */,
 				C1NOWPLAY004BF00000000004 /* NowPlayingService.swift in Sources */,
 				C1NOWPLAY005BF00000000005 /* NowPlayingView.swift in Sources */,
-				C1NOTCH001BF00000000001 /* NotchPanel.swift in Sources */,
-				C1NOTCH002BF00000000002 /* NotchGeometry.swift in Sources */,
-				C1NOTCH003BF00000000003 /* NotchShape.swift in Sources */,
-				C1NOTCH004BF00000000004 /* NotchNowPlayingController.swift in Sources */,
-				C1NOTCH005BF00000000005 /* NotchNowPlayingView.swift in Sources */,
 				C1SEEK001BF00000000001 /* NowPlayingSeekBar.swift in Sources */,
 				C1AUTOEQ001BF00000000001 /* AutoEQLibraryService.swift in Sources */,
 				C1AUTOEQ002BF00000000002 /* AutoEQLibrarySheet.swift in Sources */,
@@ -426,6 +405,7 @@
 				C1MIXER001BF00000000001 /* MixerStateStore.swift in Sources */,
 				C1APPLIST001BF00000000001 /* AppListStore.swift in Sources */,
 				C1MIXANAL001BF00000000001 /* MixAnalyzer.swift in Sources */,
+				C1ANPUMP0001BF0000000001 /* AnalysisPump.swift in Sources */,
 				C1MRADAPT001BF00000000001 /* MediaRemoteAdapterClient.swift in Sources */,
 				C1PEREQ002BF00000000002 /* PerAppEQSheet.swift in Sources */,
 				15DEB2CEFCF948B4BA18D9FC /* DSPValidation.swift in Sources */,

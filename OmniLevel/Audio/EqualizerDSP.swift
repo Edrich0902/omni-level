@@ -4,41 +4,67 @@ import os
 /// Realtime-safe 16-band peaking EQ.
 ///
 /// Parameter updates **never** tear down filters or clear filter memory — that was
-/// the source of zipper/static while dragging. Coefficients are double-buffered and
-/// swapped atomically; biquad delay state stays continuous across edits.
+/// the source of zipper/static while dragging. Biquad delay state stays continuous
+/// across edits.
+///
+/// Threading: control methods publish coefficients into `pending` under `lock`.
+/// The audio thread only ever *tries* the lock to pick up a new generation, so a
+/// UI thread holding it can never stall a render cycle. Filter memory lives in a
+/// `RenderState` owned by exactly one audio thread (one per output bus for the
+/// shared global EQ).
 public final class EqualizerDSP: @unchecked Sendable {
     public static let bandCount = EqualizerBand.standardFrequencies.count
+    static let coeffStride = 5
+
+    /// Per-render-thread filter memory + private copy of the active coefficients.
+    final class RenderState: @unchecked Sendable {
+        fileprivate let coeffs: UnsafeMutablePointer<Float>
+        /// Per section: zL1, zL2, zR1, zR2.
+        fileprivate let z: UnsafeMutablePointer<Float>
+        fileprivate var generation: UInt64 = .max
+        fileprivate var resetGeneration: UInt64 = 0
+        fileprivate var bypass = true
+
+        init() {
+            let n = EqualizerDSP.bandCount
+            coeffs = .allocate(capacity: n * EqualizerDSP.coeffStride)
+            coeffs.initialize(repeating: 0, count: n * EqualizerDSP.coeffStride)
+            z = .allocate(capacity: n * 4)
+            z.initialize(repeating: 0, count: n * 4)
+        }
+
+        deinit {
+            coeffs.deallocate()
+            z.deallocate()
+        }
+    }
 
     private let lock = OSAllocatedUnfairLock()
     private var sampleRate: Double = 48_000
     private var bands: [EqualizerBand]
     private var autoPreAmpEnabled: Bool = false
     private var autoPreAmpdB: Float = 0
-    private var isWireBypass: Bool = true
 
-    /// Double-buffered RBJ coeffs: band-major groups of 5 (b0,b1,b2,a1,a2) as Float.
-    private var coeffFront: [Float]
-    private var coeffBack: [Float]
-    private var usingFront: Bool = true
+    /// Latest RBJ coeffs: band-major groups of 5 (b0,b1,b2,a1,a2). Written under `lock`.
+    private let pending: UnsafeMutablePointer<Float>
+    private var pendingBypass = true
+    private var pendingGeneration: UInt64 = 0
+    private var pendingResetGeneration: UInt64 = 0
 
-    /// Transposed direct-form II state — one (z1,z2) per section per channel.
-    private var zL1: [Float]
-    private var zL2: [Float]
-    private var zR1: [Float]
-    private var zR2: [Float]
+    /// State used by the single-bus `processChannels` overloads (override EQs, tests).
+    private let defaultState = RenderState()
 
     public init() {
         self.bands = EqualizerBand.standardBands()
         let n = Self.bandCount
-        self.coeffFront = [Float](repeating: 0, count: n * 5)
-        self.coeffBack = [Float](repeating: 0, count: n * 5)
-        self.zL1 = [Float](repeating: 0, count: n)
-        self.zL2 = [Float](repeating: 0, count: n)
-        self.zR1 = [Float](repeating: 0, count: n)
-        self.zR2 = [Float](repeating: 0, count: n)
+        self.pending = .allocate(capacity: n * Self.coeffStride)
+        pending.initialize(repeating: 0, count: n * Self.coeffStride)
         rebuildFilters(resetState: true)
         recalculateAutoPreAmp()
-        isWireBypass = true
+    }
+
+    deinit {
+        pending.deallocate()
     }
 
     // MARK: - State accessors
@@ -137,48 +163,80 @@ public final class EqualizerDSP: @unchecked Sendable {
         }
     }
 
-    /// Realtime path — only holds the lock for a snapshot; processing stays off the lock
-    /// so fader drags (coeff rebuild) do not stall the mix thread for an entire buffer.
+    /// Realtime path using this EQ's own filter memory. Only one thread may call this.
     public func processChannels(
         left: UnsafeMutablePointer<Float>,
         right: UnsafeMutablePointer<Float>,
         frameCount: Int
     ) {
+        processChannels(left: left, right: right, frameCount: frameCount, state: defaultState)
+    }
+
+    /// Realtime path with caller-owned filter memory (one `RenderState` per audio thread).
+    /// Never blocks and never allocates.
+    func processChannels(
+        left: UnsafeMutablePointer<Float>,
+        right: UnsafeMutablePointer<Float>,
+        frameCount: Int,
+        state: RenderState
+    ) {
         guard frameCount > 0 else { return }
+        syncCoefficients(into: state)
+        if state.bypass { return }
 
-        lock.lock()
-        let bypass = isWireBypass
-        let useFront = usingFront
-        lock.unlock()
-        if bypass { return }
+        let coeffs = state.coeffs
+        let z = state.z
+        for s in 0..<Self.bandCount {
+            let c = coeffs + s * Self.coeffStride
+            let b0 = c[0], b1 = c[1], b2 = c[2], a1 = c[3], a2 = c[4]
+            let zs = z + s * 4
 
-        // Coeff arrays are double-buffered; inactive side is written only under lock.
-        // Active side is stable for the duration of a buffer.
-        let coeffs = useFront ? coeffFront : coeffBack
-        let n = Self.bandCount
-
-        for i in 0..<frameCount {
-            var xL = left[i]
-            var xR = right[i]
-            for s in 0..<n {
-                let c = s * 5
-                let b0 = coeffs[c], b1 = coeffs[c + 1], b2 = coeffs[c + 2]
-                let a1 = coeffs[c + 3], a2 = coeffs[c + 4]
-
-                // Transposed DF-II — continuous state across parameter edits.
-                let yL = b0 * xL + zL1[s]
-                zL1[s] = b1 * xL - a1 * yL + zL2[s]
-                zL2[s] = b2 * xL - a2 * yL
-                xL = yL
-
-                let yR = b0 * xR + zR1[s]
-                zR1[s] = b1 * xR - a1 * yR + zR2[s]
-                zR2[s] = b2 * xR - a2 * yR
-                xR = yR
+            // Transposed DF-II, one section across the whole block per channel.
+            var z1 = zs[0], z2 = zs[1]
+            for i in 0..<frameCount {
+                let x = left[i]
+                let y = b0 * x + z1
+                z1 = b1 * x - a1 * y + z2
+                z2 = b2 * x - a2 * y
+                left[i] = y
             }
-            left[i] = xL
-            right[i] = xR
+            zs[0] = Self.flushDenormal(z1)
+            zs[1] = Self.flushDenormal(z2)
+
+            z1 = zs[2]; z2 = zs[3]
+            for i in 0..<frameCount {
+                let x = right[i]
+                let y = b0 * x + z1
+                z1 = b1 * x - a1 * y + z2
+                z2 = b2 * x - a2 * y
+                right[i] = y
+            }
+            zs[2] = Self.flushDenormal(z1)
+            zs[3] = Self.flushDenormal(z2)
         }
+    }
+
+    /// Picks up the latest published coefficients if the lock is free; otherwise keeps
+    /// the previous set for one more buffer.
+    private func syncCoefficients(into state: RenderState) {
+        guard lock.lockIfAvailable() else { return }
+        if state.generation != pendingGeneration {
+            state.coeffs.update(from: pending, count: Self.bandCount * Self.coeffStride)
+            state.bypass = pendingBypass
+            state.generation = pendingGeneration
+        }
+        let resetGen = pendingResetGeneration
+        lock.unlock()
+
+        if state.resetGeneration != resetGen {
+            state.z.update(repeating: 0, count: Self.bandCount * 4)
+            state.resetGeneration = resetGen
+        }
+    }
+
+    @inline(__always)
+    private static func flushDenormal(_ v: Float) -> Float {
+        abs(v) < 1e-20 ? 0 : v
     }
 
     // MARK: - Frequency response for UI curve
@@ -269,14 +327,10 @@ public final class EqualizerDSP: @unchecked Sendable {
         return peak
     }
 
-    /// Rebuild coefficient table into the inactive buffer, then flip — never zeros filters while dragging.
+    /// Publish a new coefficient generation (must be called with lock held) — never zeros
+    /// filters while dragging; render states pick it up on their next buffer.
     private func rebuildFilters(resetState: Bool) {
-        let n = Self.bandCount
         var anyBoost = false
-        // Write into the inactive half so the audio thread can keep reading the front.
-        let writeToFront = !usingFront
-        var target = writeToFront ? coeffFront : coeffBack
-
         for (i, band) in bands.enumerated() {
             if abs(band.gaindB) > 0.02 { anyBoost = true }
             let c = peakingCoefficients(
@@ -285,28 +339,16 @@ public final class EqualizerDSP: @unchecked Sendable {
                 q: Double(band.qFactor),
                 sampleRate: sampleRate
             )
-            let base = i * 5
-            target[base] = Float(c.b0)
-            target[base + 1] = Float(c.b1)
-            target[base + 2] = Float(c.b2)
-            target[base + 3] = Float(c.a1)
-            target[base + 4] = Float(c.a2)
+            let base = i * Self.coeffStride
+            pending[base] = Float(c.b0)
+            pending[base + 1] = Float(c.b1)
+            pending[base + 2] = Float(c.b2)
+            pending[base + 3] = Float(c.a1)
+            pending[base + 4] = Float(c.a2)
         }
-
-        if writeToFront {
-            coeffFront = target
-        } else {
-            coeffBack = target
-        }
-        usingFront = writeToFront
-        isWireBypass = !anyBoost
-
-        if resetState {
-            for i in 0..<n {
-                zL1[i] = 0; zL2[i] = 0
-                zR1[i] = 0; zR2[i] = 0
-            }
-        }
+        pendingBypass = !anyBoost
+        pendingGeneration &+= 1
+        if resetState { pendingResetGeneration &+= 1 }
     }
 
     /// RBJ peaking EQ, a0-normalized.

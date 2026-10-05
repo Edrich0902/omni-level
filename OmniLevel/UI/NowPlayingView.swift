@@ -82,6 +82,7 @@ struct NowPlayingCard: View {
     var onPrevious: () -> Void
     var onNext: () -> Void
     var onSeek: (TimeInterval) -> Void
+    @Environment(\.liveUpdatesEnabled) private var liveUpdatesEnabled
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -106,7 +107,7 @@ struct NowPlayingCard: View {
                             Image(systemName: "waveform")
                                 .font(.system(size: 9, weight: .semibold))
                                 .foregroundStyle(sourceTint.opacity(0.9))
-                                .symbolEffect(.variableColor.iterative, isActive: item.isPlaying)
+                                .symbolEffect(.variableColor.iterative, isActive: item.isPlaying && liveUpdatesEnabled)
                         }
                     }
 

@@ -15,17 +15,28 @@ final class NowPlayingService: ObservableObject {
     private var refreshTask: Task<Void, Never>?
     private var isRefreshing = false
     private var consecutiveIdlePolls = 0
+    /// Polling only runs while Now Playing is on screen (popover open).
+    private var isActive = false
+    /// Blocking fetches that outlive their timeout keep running; never start another
+    /// on top of one still in flight (they used to pile up under CPU load).
+    private let spotifyInFlight = InFlightFlag()
+    private let systemInFlight = InFlightFlag()
+    private var lastSpotifyItem: NowPlayingItem?
+    private var lastSystemItem: NowPlayingItem?
 
     init() {}
 
     func start() {
         stop()
+        isActive = true
+        consecutiveIdlePolls = 0
         Task { await refresh() }
         // Adaptive polling while media is active; idle path slows the timer further.
         scheduleTimer(interval: 1.4)
     }
 
     func stop() {
+        isActive = false
         timer?.invalidate()
         timer = nil
         refreshTask?.cancel()
@@ -80,6 +91,7 @@ final class NowPlayingService: ObservableObject {
         }
 
         // Idle: poll less; active: keep ~1s so transport stays snappy.
+        guard isActive else { return }
         let idle = next.isEmpty
         if idle {
             consecutiveIdlePolls += 1
@@ -180,13 +192,25 @@ final class NowPlayingService: ObservableObject {
     // MARK: - Spotify
 
     private func fetchSpotify() async -> NowPlayingItem? {
-        guard SpotifyController.isRunning else { return nil }
+        guard SpotifyController.isRunning else {
+            lastSpotifyItem = nil
+            return nil
+        }
 
         // AppleScript can hang; race against a short timeout so poll cycles never wedge.
-        let state = await timedFetch(seconds: 0.85) {
+        let outcome = await timedFetch(seconds: 0.85, inFlight: spotifyInFlight) {
             SpotifyController.fetchState()
         }
-        guard let state else { return nil }
+        let state: SpotifyController.State
+        switch outcome {
+        case .busy:
+            return lastSpotifyItem
+        case .value(nil):
+            lastSpotifyItem = nil
+            return nil
+        case .value(let fetched?):
+            state = fetched
+        }
 
         var art = artworkCache[state.artworkURL ?? ""]
         if art == nil, let urlStr = state.artworkURL, let url = URL(string: urlStr) {
@@ -195,7 +219,7 @@ final class NowPlayingService: ObservableObject {
         }
 
         let hasDuration = state.duration > 0.5
-        return NowPlayingItem(
+        let item = NowPlayingItem(
             id: "spotify",
             source: .spotify,
             appName: "Spotify",
@@ -212,20 +236,34 @@ final class NowPlayingService: ObservableObject {
             progressSampledAt: .now,
             canSeek: hasDuration
         )
+        lastSpotifyItem = item
+        return item
     }
 
-    /// Runs blocking work off the main actor and abandons it after `seconds` (result may arrive later unused).
+    private enum FetchOutcome<T: Sendable>: Sendable {
+        /// Work finished in time (or returned nothing).
+        case value(T?)
+        /// Timed out, or the previous fetch is still running.
+        case busy
+    }
+
+    /// Runs blocking work off the main actor and abandons it after `seconds` (result may arrive
+    /// later unused). Skips launching new work while a previous call is still running.
     private func timedFetch<T: Sendable>(
         seconds: Double,
+        inFlight: InFlightFlag,
         work: @escaping @Sendable () -> T?
-    ) async -> T? {
-        await withCheckedContinuation { continuation in
-            let gate = OnceResumeBox<T?>()
+    ) async -> FetchOutcome<T> {
+        guard inFlight.tryBegin() else { return .busy }
+        return await withCheckedContinuation { continuation in
+            let gate = OnceResumeBox<FetchOutcome<T>>()
             DispatchQueue.global(qos: .utility).async {
-                gate.resume(continuation, with: work())
+                let value = work()
+                inFlight.end()
+                gate.resume(continuation, with: .value(value))
             }
             DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + seconds) {
-                gate.resume(continuation, with: nil)
+                gate.resume(continuation, with: .busy)
             }
         }
     }
@@ -249,7 +287,10 @@ final class NowPlayingService: ObservableObject {
     private func fetchSystemNowPlaying(excludingSpotifyIfPresent: Bool) async -> NowPlayingItem? {
         guard MediaRemoteBridge.isAvailable else { return nil }
 
-        let snapshot: MediaRemoteSnapshot? = await timedFetch(seconds: 1.6) { () -> MediaRemoteSnapshot? in
+        let outcome: FetchOutcome<MediaRemoteSnapshot> = await timedFetch(
+            seconds: 1.6,
+            inFlight: systemInFlight
+        ) { () -> MediaRemoteSnapshot? in
             // Prefer one adapter round-trip on macOS 15.4+ (in-process MediaRemote is blocked).
             if let adapted = MediaRemoteAdapterClient.fetchNowPlaying(includeArtwork: false) {
                 return Self.snapshot(fromAdapter: adapted)
@@ -295,8 +336,26 @@ final class NowPlayingService: ObservableObject {
             )
         }
 
-        guard let snapshot else { return nil }
+        let snapshot: MediaRemoteSnapshot
+        switch outcome {
+        case .busy:
+            return lastSystemItem
+        case .value(nil):
+            lastSystemItem = nil
+            return nil
+        case .value(let fetched?):
+            snapshot = fetched
+        }
 
+        let item = systemItem(from: snapshot, excludingSpotifyIfPresent: excludingSpotifyIfPresent)
+        lastSystemItem = item
+        return item
+    }
+
+    private func systemItem(
+        from snapshot: MediaRemoteSnapshot,
+        excludingSpotifyIfPresent: Bool
+    ) -> NowPlayingItem? {
         var appName = snapshot.appNameHint ?? "Now Playing"
         var bundleID = snapshot.bundleIDHint
         var icon: NSImage?
@@ -421,6 +480,24 @@ final class NowPlayingService: ObservableObject {
             log.debug("artwork fetch failed: \(error.localizedDescription, privacy: .public)")
             return nil
         }
+    }
+}
+
+/// Thread-safe "one at a time" flag for blocking background fetches.
+private final class InFlightFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var running = false
+
+    func tryBegin() -> Bool {
+        lock.withLock {
+            guard !running else { return false }
+            running = true
+            return true
+        }
+    }
+
+    func end() {
+        lock.withLock { running = false }
     }
 }
 

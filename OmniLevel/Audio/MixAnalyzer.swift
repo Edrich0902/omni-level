@@ -4,7 +4,7 @@ import os
 
 /// Post-mix stereo analyzer for the Monitor suite.
 ///
-/// Audio thread writes locked state (no allocations in the hot path beyond fixed buffers).
+/// Fed from the engine's analysis thread (never the render thread) in ~10 ms chunks.
 /// UI reads a single `Snapshot` at display rate.
 public final class MixAnalyzer: @unchecked Sendable {
     public struct Snapshot: Sendable {
@@ -123,7 +123,8 @@ public final class MixAnalyzer: @unchecked Sendable {
     private var framesAboveNeg3: UInt64 = 0
     private var totalFrames: UInt64 = 0
 
-    private let peakHoldDecay: Float = 0.965
+    /// Peak-hold fall rate once the signal drops below the held value.
+    private let peakHoldFalldBPerSecond: Float = 12
 
     public init() {
         gonioX = [Float](repeating: 0, count: Self.goniometerCapacity)
@@ -137,12 +138,8 @@ public final class MixAnalyzer: @unchecked Sendable {
 
     public func setSampleRate(_ rate: Double) {
         guard rate > 0 else { return }
-        lock.withLock {
-            sampleRate = rate
-            if abs(rate - kConfiguredRate) > 1 {
-                configureKFilters(rate: rate)
-            }
-        }
+        // K-filters are owned by `process` and reconfigured there on the next chunk.
+        lock.withLock { sampleRate = rate }
     }
 
     public func resetSession() {
@@ -167,7 +164,7 @@ public final class MixAnalyzer: @unchecked Sendable {
         }
     }
 
-    /// Audio-thread entry. `dt` implied by frameCount / sampleRate.
+    /// Analysis-thread entry (single caller). `dt` implied by frameCount / sampleRate.
     public func process(
         left: UnsafePointer<Float>,
         right: UnsafePointer<Float>,
@@ -286,12 +283,13 @@ public final class MixAnalyzer: @unchecked Sendable {
         rmsR = rmsDbR
         samplePeakL = spL
         samplePeakR = spR
-        sampleHoldL = max(spL, sampleHoldL * peakHoldDecay)
-        sampleHoldR = max(spR, sampleHoldR * peakHoldDecay)
+        let holdFall = peakHoldFalldBPerSecond * Float(Double(frameCount) / max(rate, 1))
+        sampleHoldL = max(spL, sampleHoldL - holdFall)
+        sampleHoldR = max(spR, sampleHoldR - holdFall)
         truePeakL = tpL
         truePeakR = tpR
-        trueHoldL = max(tpL, trueHoldL * peakHoldDecay)
-        trueHoldR = max(tpR, trueHoldR * peakHoldDecay)
+        trueHoldL = max(tpL, trueHoldL - holdFall)
+        trueHoldR = max(tpR, trueHoldR - holdFall)
 
         corrSumLR = corrSumLR * 0.85 + sumLR * 0.15
         corrSumL2 = corrSumL2 * 0.85 + sumL2 * 0.15
@@ -469,16 +467,15 @@ public final class MixAnalyzer: @unchecked Sendable {
     @inline(__always)
     private func truePeakBetween(_ a: Float, _ b: Float) -> Float {
         // Evaluate at 1/4, 1/2, 3/4 with hermite-ish linear+cubic blend
-        var peak: Float = 0
-        for t in [Float(0.25), 0.5, 0.75] {
+        @inline(__always) func at(_ t: Float) -> Float {
             // Catmull-Rom-ish with duplicated endpoints: lerp + slight overshoot via smoothstep
             let x = a + (b - a) * t
             // Add parabolic peak estimate
             let mid = (a + b) * 0.5
             let curve = mid + (mid - (a * (1 - t) + b * t)) * 0.15
-            peak = max(peak, abs(x), abs(curve))
+            return max(abs(x), abs(curve))
         }
-        return peak
+        return max(at(0.25), at(0.5), at(0.75))
     }
 
     @inline(__always)

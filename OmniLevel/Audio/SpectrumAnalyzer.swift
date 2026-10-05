@@ -279,4 +279,9 @@ public final class SpectrumAnalyzer: @unchecked Sendable {
         _ = analyze()
         return magnitudes
     }
+
+    /// Magnitudes from the most recent `analyze()` (no new FFT).
+    public func latestMagnitudes() -> [Float] {
+        magnitudes
+    }
 }

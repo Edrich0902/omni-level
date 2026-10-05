@@ -246,6 +246,38 @@ public final class ProcessTapIO: @unchecked Sendable {
             .filter { !$0.isEmpty }
         guard !needles.isEmpty else { return [] }
 
+        let pids = audioProcessTable()
+            .filter { entry in needles.contains(where: { entry.bundleID.contains($0) }) }
+            .map(\.pid)
+        return Array(Set(pids)).sorted()
+    }
+
+    private static func findProcessObjectByEnumerating(pid: pid_t) -> AudioObjectID? {
+        audioProcessTable().first(where: { $0.pid == pid })?.objectID
+    }
+
+    private struct AudioProcessEntry: Sendable {
+        let objectID: AudioObjectID
+        let pid: pid_t
+        /// Lowercased; empty when unavailable.
+        let bundleID: String
+    }
+
+    private static let processTableMaxAge: UInt64 = 750_000_000
+    private static let processTableCache = OSAllocatedUnfairLock<(builtAt: UInt64, entries: [AudioProcessEntry])?>(
+        initialState: nil
+    )
+
+    /// One snapshot of every Core Audio process (PID + bundle ID), reused briefly.
+    /// Enumerating costs two coreaudiod round-trips per process; refreshes used to repeat
+    /// it once per helper PID (Electron apps have dozens), loading the daemon that runs
+    /// everyone's audio IO.
+    private static func audioProcessTable() -> [AudioProcessEntry] {
+        let now = DispatchTime.now().uptimeNanoseconds
+        if let cached = processTableCache.withLock({ $0 }), now &- cached.builtAt < processTableMaxAge {
+            return cached.entries
+        }
+
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyProcessObjectList,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -272,7 +304,8 @@ public final class ProcessTapIO: @unchecked Sendable {
             &processes
         ) == noErr else { return [] }
 
-        var pids: [pid_t] = []
+        var entries: [AudioProcessEntry] = []
+        entries.reserveCapacity(processes.count)
         for processID in processes {
             var processPID: pid_t = 0
             var pidSize = UInt32(MemoryLayout<pid_t>.size)
@@ -295,53 +328,12 @@ public final class ProcessTapIO: @unchecked Sendable {
                 AudioObjectGetPropertyData(processID, &bundleAddress, 0, nil, &bundleSize, ptr)
             }
             let bundle = (bundleStatus == noErr ? bundleRef as String? : nil)?.lowercased() ?? ""
-            guard needles.contains(where: { bundle.contains($0) }) else { continue }
-            pids.append(processPID)
+            entries.append(AudioProcessEntry(objectID: processID, pid: processPID, bundleID: bundle))
         }
-        return Array(Set(pids)).sorted()
-    }
 
-    private static func findProcessObjectByEnumerating(pid: pid_t) -> AudioObjectID? {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyProcessObjectList,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-
-        var dataSize: UInt32 = 0
-        guard AudioObjectGetPropertyDataSize(
-            AudioObjectID(kAudioObjectSystemObject),
-            &address,
-            0,
-            nil,
-            &dataSize
-        ) == noErr, dataSize > 0 else { return nil }
-
-        let count = Int(dataSize) / MemoryLayout<AudioObjectID>.size
-        var processes = [AudioObjectID](repeating: 0, count: count)
-        guard AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &address,
-            0,
-            nil,
-            &dataSize,
-            &processes
-        ) == noErr else { return nil }
-
-        for processID in processes {
-            var processPID: pid_t = 0
-            var pidSize = UInt32(MemoryLayout<pid_t>.size)
-            var pidAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioProcessPropertyPID,
-                mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain
-            )
-            if AudioObjectGetPropertyData(processID, &pidAddress, 0, nil, &pidSize, &processPID) == noErr,
-               processPID == pid {
-                return processID
-            }
-        }
-        return nil
+        let snapshot = entries
+        processTableCache.withLock { $0 = (now, snapshot) }
+        return snapshot
     }
 
     public static func tapUID(for tapID: AudioObjectID) -> String? {

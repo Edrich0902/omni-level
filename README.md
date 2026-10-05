@@ -1,6 +1,6 @@
 # OmniLevel
 
-Native macOS **menu bar** audio utility for Apple Silicon: per-app routing and mixing, a 16-band parametric EQ, AutoEQ headphone profiles, a notch Now Playing island, and a full Monitor analyzer suite.
+Native macOS **menu bar** audio utility for Apple Silicon: per-app routing and mixing, a 16-band parametric EQ, AutoEQ headphone profiles, Now Playing transport, and a full Monitor analyzer suite.
 
 OmniLevel sits in the menu bar (`LSUIElement` — no Dock icon). Click the waveform icon to open the popover; eligible apps are **auto-routed** on launch.
 
@@ -14,7 +14,7 @@ OmniLevel sits in the menu bar (`LSUIElement` — no Dock icon). Click the wavef
 | **Per-app EQ** | Override the global curve per process; in/out band meters while editing |
 | **Monitor** | True-peak + crest, limiter GR, correlation, Mid/Side width, LUFS (M/S/I), loudness history, session stats |
 | **Visualizers** | Spectrum, Liquid, Mirror, 1/3-octave RTA, spectrogram, goniometer/scope — optional EQ curve overlay |
-| **Now Playing** | Popover transport + **Dynamic Island–style notch** island (hover expand). Spotify via AppleScript; browsers/Music/etc via MediaRemote Adapter (works on macOS 15.4+) |
+| **Now Playing** | Popover transport and seek. Spotify via AppleScript; browsers/Music/etc via MediaRemote Adapter (works on macOS 15.4+) |
 | **Routing** | Core Audio process taps (including browser helpers e.g. Arc/Chrome/Safari), multi-destination output buses, global bypass |
 
 ## Requirements
@@ -50,7 +50,8 @@ For day-to-day testing, install a signed copy to `/Applications/OmniLevel.app` (
 3. **Equalizer** — shape the global curve; load presets or AutoEQ profiles; enable Auto Pre-Amp. Session EQ restores on launch. Spectrum underlay shows pre/post energy under the curve.
 4. **Monitor** — scrollable analyzer dashboard (popover ~480×820): meters + LUFS, viz modes (Spectrum / Liquid / Mirror / RTA / Spectro / Scope), loudness history, session peak / time above −3 dBTP / limiter hits / loudest app (Reset clears session counters). Toggle **EQ** to overlay the response curve on Spectrum / RTA / Spectro.
 5. **⋯ menu** — Bypass OmniLevel for dry system audio; privacy shortcuts.
-6. **Notch Now Playing** — transport and artwork at the top of the screen; expands on hover.
+
+The popover only renders, meters and polls Now Playing while it is open, and only the selected tab animates.
 
 Browsers are tapped via helper processes registered with Core Audio — YouTube in Arc (and similar) is supported.
 
@@ -73,7 +74,7 @@ chmod +x Scripts/run-dsp-validation.sh
 | `SpectrumAnalyzer` | Realtime FFT, log bars, 1/3-octave RTA, spectrogram columns |
 | `MixAnalyzer` | Post-mix LUFS, true peak, crest, correlation, Mid/Side, goniometer, session stats |
 | `MixerStateStore` / `AppListStore` / `PerAppEQStore` / `AppRouteStore` | Durable mixer, list organization, EQ overrides, output routing |
-| `NowPlayingService` / notch UI | Media Remote + Spotify bridge, island chrome |
+| `NowPlayingService` | Media Remote + Spotify bridge (polls only while the popover is open) |
 
 ## Bundle ID
 

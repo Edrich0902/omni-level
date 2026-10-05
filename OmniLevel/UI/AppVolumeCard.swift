@@ -3,8 +3,8 @@ import SwiftUI
 
 struct AppVolumeCard: View {
     let node: AppAudioNode
-    /// Live loudness in dBFS (updated independently of other card state for snappy meters).
-    let leveldB: Float
+    /// Live loudness feed; only the level row observes it so meter ticks don't rebuild the card.
+    let levelFeed: LiveLevelFeed
     let outputDevices: [AudioDeviceInfo]
     var isFavorite: Bool = false
     var canOrganize: Bool = false
@@ -30,12 +30,6 @@ struct AppVolumeCard: View {
     var onDragProvider: () -> NSItemProvider = { NSItemProvider() }
 
     private var panOffCenter: Bool { abs(node.pan) > 0.02 }
-
-    private var levelCaption: String {
-        guard node.isTapped else { return "—" }
-        if leveldB <= -48 { return "quiet" }
-        return String(format: "%.0f", leveldB)
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -160,14 +154,7 @@ struct AppVolumeCard: View {
                     .font(.system(size: 10, weight: .semibold, design: .rounded))
                     .foregroundStyle(OmniTheme.textSecondary)
                     .frame(width: 52, alignment: .leading)
-                AppPeakMeter(leveldB: leveldB, isActive: node.isTapped)
-                    .frame(height: 10)
-                Text(levelCaption)
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .foregroundStyle(OmniTheme.textSecondary)
-                    .monospacedDigit()
-                    .frame(width: 44, alignment: .trailing)
-                    .contentTransition(.identity)
+                AppLiveLevelRow(feed: levelFeed, pid: node.id, isActive: node.isTapped)
             }
 
             // Balance
@@ -415,13 +402,7 @@ struct AppVolumeCard: View {
                     .font(.system(size: 10, weight: .semibold, design: .rounded))
                     .foregroundStyle(OmniTheme.textSecondary)
                     .frame(width: 52, alignment: .leading)
-                AppPeakMeter(leveldB: leveldB, isActive: node.isTapped)
-                    .frame(height: 10)
-                Text(levelCaption)
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .foregroundStyle(OmniTheme.textSecondary)
-                    .monospacedDigit()
-                    .frame(width: 44, alignment: .trailing)
+                AppLiveLevelRow(feed: levelFeed, pid: node.id, isActive: node.isTapped)
             }
         }
         .padding(12)
@@ -474,6 +455,34 @@ struct AppVolumeCard: View {
         }
         .buttonStyle(.plain)
         .help(title)
+    }
+}
+
+/// Meter + dB caption for one app; the only part of a card that redraws at meter rate.
+private struct AppLiveLevelRow: View {
+    @ObservedObject var feed: LiveLevelFeed
+    let pid: pid_t
+    let isActive: Bool
+
+    private var leveldB: Float { feed.levels[pid] ?? -60 }
+
+    private var caption: String {
+        guard isActive else { return "—" }
+        if leveldB <= -48 { return "quiet" }
+        return String(format: "%.0f", leveldB)
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            AppPeakMeter(leveldB: leveldB, isActive: isActive)
+                .frame(height: 10)
+            Text(caption)
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .foregroundStyle(OmniTheme.textSecondary)
+                .monospacedDigit()
+                .frame(width: 44, alignment: .trailing)
+                .contentTransition(.identity)
+        }
     }
 }
 

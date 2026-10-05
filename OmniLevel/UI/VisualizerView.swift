@@ -44,23 +44,20 @@ struct VisualizerView: View {
     @State private var rtaBallistics: RTABallisticsUI = .fast
     @State private var showEQCurve = true
     @State private var historyUsesLUFS = true
+    @Environment(\.liveUpdatesEnabled) private var liveUpdatesEnabled
 
-    @State private var bars: [Float] = Array(repeating: -80, count: 40)
-    @State private var peaks: [Float] = Array(repeating: -80, count: 40)
-    @State private var rtaBars: [Float] = Array(repeating: -80, count: SpectrumAnalyzer.thirdOctaveCenters.count)
-    @State private var mix = MixAnalyzer.Snapshot.silence
-    @State private var gr = AutoPreAmpLimiter.GRSnapshot.zero
-    @State private var gonio: [MixAnalyzer.GoniometerPoint] = []
-    @State private var spectroColumns: [[Float]] = []
-    @State private var eqCurve: [(frequency: Float, magnitudedB: Float)] = []
+    /// Per-tick data. Not observed here — only the live sections redraw at display rate,
+    /// so the header and mode picker are never rebuilt by meter ticks.
+    @StateObject private var live = MonitorLive()
 
-    @State private var smoothL: CGFloat = 0
-    @State private var smoothR: CGFloat = 0
-    @State private var smoothPeakL: CGFloat = 0
-    @State private var smoothPeakR: CGFloat = 0
-    @State private var smoothTPL: CGFloat = 0
-    @State private var smoothTPR: CGFloat = 0
-    @State private var lastTick: Date = .now
+    private var bars: [Float] { live.bars }
+    private var peaks: [Float] { live.peaks }
+    private var rtaBars: [Float] { live.rtaBars }
+    private var mix: MixAnalyzer.Snapshot { live.mix }
+    private var gr: AutoPreAmpLimiter.GRSnapshot { live.gr }
+    private var gonio: [MixAnalyzer.GoniometerPoint] { live.gonio }
+    private var spectroColumns: [[Float]] { live.spectroColumns }
+    private var eqCurve: [(frequency: Float, magnitudedB: Float)] { live.eqCurve }
 
     private let barCount = 40
     private let spectroWidth = 96
@@ -70,14 +67,18 @@ struct VisualizerView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 header
-                meterDashboard
+                LiveSection(feed: live.dashboard) { meterDashboard }
                 modeChrome
-                spectrumSurface
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 200)
-                loudnessHistory
-                    .frame(height: 56)
-                sessionFooter
+                LiveSection(feed: live.surface) {
+                    spectrumSurface
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 200)
+                }
+                LiveSection(feed: live.dashboard) {
+                    loudnessHistory
+                        .frame(height: 56)
+                    sessionFooter
+                }
             }
             .padding(16)
         }
@@ -86,7 +87,7 @@ struct VisualizerView: View {
             TimelineView(
                 .animation(
                     minimumInterval: isActive ? 1.0 / 30.0 : 1.0 / 8.0,
-                    paused: false
+                    paused: !liveUpdatesEnabled || !isActive
                 )
             ) { timeline in
                 Color.clear
@@ -96,7 +97,7 @@ struct VisualizerView: View {
             }
         }
         .onAppear {
-            lastTick = .now
+            live.lastTick = .now
             tick(at: .now)
         }
     }
@@ -176,8 +177,8 @@ struct VisualizerView: View {
     private var meterDashboard: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                channelMeter(label: "L", rms: smoothL, peak: smoothPeakL, tp: smoothTPL)
-                channelMeter(label: "R", rms: smoothR, peak: smoothPeakR, tp: smoothTPR)
+                channelMeter(label: "L", rms: live.smoothL, peak: live.smoothPeakL, tp: live.smoothTPL)
+                channelMeter(label: "R", rms: live.smoothR, peak: live.smoothPeakR, tp: live.smoothTPR)
             }
             .frame(height: 18)
 
@@ -421,8 +422,9 @@ struct VisualizerView: View {
                 Button("Reset") {
                     engine.mixAnalyzer.resetSession()
                     engine.limiter.resetGRSession()
-                    mix = engine.mixAnalyzer.snapshot()
-                    gr = engine.limiter.snapshotGR()
+                    live.mix = engine.mixAnalyzer.snapshot()
+                    live.gr = engine.limiter.snapshotGR()
+                    live.dashboard.changed()
                 }
                 .buttonStyle(.plain)
                 .font(.system(size: 10, weight: .semibold, design: .rounded))
@@ -655,30 +657,29 @@ struct VisualizerView: View {
     // MARK: - Tick
 
     private func tick(at date: Date) {
-        let dt = Float(min(0.05, max(1.0 / 120.0, date.timeIntervalSince(lastTick))))
-        lastTick = date
+        let dt = Float(min(0.05, max(1.0 / 120.0, date.timeIntervalSince(live.lastTick))))
+        live.lastTick = date
 
-        // Always keep session / meter state fresh (cheap snapshot).
-        mix = engine.mixAnalyzer.snapshot()
-        gr = engine.limiter.snapshotGR()
+        let mix = engine.mixAnalyzer.snapshot()
+        live.mix = mix
+        live.gr = engine.limiter.snapshotGR()
 
         let a = CGFloat(1 - exp(-Double(dt) / 0.04))
         let ap = CGFloat(1 - exp(-Double(dt) / 0.08))
-        smoothL += (CGFloat(dbToUnit(mix.rmsLeft)) - smoothL) * a
-        smoothR += (CGFloat(dbToUnit(mix.rmsRight)) - smoothR) * a
-        smoothPeakL += (CGFloat(dbToUnit(mix.samplePeakHoldLeft)) - smoothPeakL) * ap
-        smoothPeakR += (CGFloat(dbToUnit(mix.samplePeakHoldRight)) - smoothPeakR) * ap
-        smoothTPL += (CGFloat(dbToUnit(mix.truePeakHoldLeft)) - smoothTPL) * ap
-        smoothTPR += (CGFloat(dbToUnit(mix.truePeakHoldRight)) - smoothTPR) * ap
-
-        guard isActive else { return }
+        live.smoothL += (CGFloat(dbToUnit(mix.rmsLeft)) - live.smoothL) * a
+        live.smoothR += (CGFloat(dbToUnit(mix.rmsRight)) - live.smoothR) * a
+        live.smoothPeakL += (CGFloat(dbToUnit(mix.samplePeakHoldLeft)) - live.smoothPeakL) * ap
+        live.smoothPeakR += (CGFloat(dbToUnit(mix.samplePeakHoldRight)) - live.smoothPeakR) * ap
+        live.smoothTPL += (CGFloat(dbToUnit(mix.truePeakHoldLeft)) - live.smoothTPL) * ap
+        live.smoothTPR += (CGFloat(dbToUnit(mix.truePeakHoldRight)) - live.smoothTPR) * ap
+        live.dashboard.changed()
 
         switch mode {
         case .spectrum, .liquid, .mirror:
-            bars = engine.spectrum.logBars(count: barCount, dt: dt)
-            peaks = engine.spectrum.peakHoldBars()
+            live.bars = engine.spectrum.logBars(count: barCount, dt: dt)
+            live.peaks = engine.spectrum.peakHoldBars()
         case .rta:
-            rtaBars = engine.spectrum.rtaBars(
+            live.rtaBars = engine.spectrum.rtaBars(
                 ballistics: rtaBallistics.dsp,
                 sampleRate: engine.sampleRate,
                 dt: dt
@@ -686,12 +687,17 @@ struct VisualizerView: View {
         case .spectrogram:
             appendSpectroColumn()
         case .scope:
-            gonio = engine.mixAnalyzer.goniometerPoints()
+            live.gonio = engine.mixAnalyzer.goniometerPoints()
         }
 
         if showEQCurve, mode.supportsEQOverlay {
-            eqCurve = engine.equalizer.magnitudeResponse(pointCount: 96)
+            let signature = engine.equalizer.curveSignature()
+            if signature != live.eqCurveSignature || live.eqCurve.isEmpty {
+                live.eqCurve = engine.equalizer.magnitudeResponse(pointCount: 96)
+                live.eqCurveSignature = signature
+            }
         }
+        live.surface.changed()
     }
 
     private func appendSpectroColumn() {
@@ -709,9 +715,9 @@ struct VisualizerView: View {
             }
             col[i] = peak
         }
-        spectroColumns.append(col)
-        if spectroColumns.count > spectroWidth {
-            spectroColumns.removeFirst(spectroColumns.count - spectroWidth)
+        live.spectroColumns.append(col)
+        if live.spectroColumns.count > spectroWidth {
+            live.spectroColumns.removeFirst(live.spectroColumns.count - spectroWidth)
         }
     }
 
@@ -749,5 +755,48 @@ struct VisualizerView: View {
         let f = min(max(freq, minF), maxF)
         let t = log(f / minF) / log(maxF / minF)
         return CGFloat(t) * width
+    }
+}
+
+// MARK: - Live state
+
+/// Display-rate Monitor data. Never publishes itself; `dashboard` / `surface` notify only
+/// the sections that draw them.
+@MainActor
+final class MonitorLive: ObservableObject {
+    let dashboard = MonitorFeed()
+    let surface = MonitorFeed()
+
+    var bars: [Float] = Array(repeating: -80, count: 40)
+    var peaks: [Float] = Array(repeating: -80, count: 40)
+    var rtaBars: [Float] = Array(repeating: -80, count: SpectrumAnalyzer.thirdOctaveCenters.count)
+    var mix = MixAnalyzer.Snapshot.silence
+    var gr = AutoPreAmpLimiter.GRSnapshot.zero
+    var gonio: [MixAnalyzer.GoniometerPoint] = []
+    var spectroColumns: [[Float]] = []
+    var eqCurve: [(frequency: Float, magnitudedB: Float)] = []
+    var eqCurveSignature: UInt64 = 0
+
+    var smoothL: CGFloat = 0
+    var smoothR: CGFloat = 0
+    var smoothPeakL: CGFloat = 0
+    var smoothPeakR: CGFloat = 0
+    var smoothTPL: CGFloat = 0
+    var smoothTPR: CGFloat = 0
+    var lastTick: Date = .now
+}
+
+@MainActor
+final class MonitorFeed: ObservableObject {
+    func changed() { objectWillChange.send() }
+}
+
+/// Re-evaluates `content` whenever `feed` changes, without invalidating the parent view.
+private struct LiveSection<Content: View>: View {
+    @ObservedObject var feed: MonitorFeed
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        content()
     }
 }

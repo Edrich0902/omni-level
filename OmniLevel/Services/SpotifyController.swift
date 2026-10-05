@@ -26,25 +26,44 @@ enum SpotifyController {
         NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.icon
     }
 
+    private static let fetchSource = """
+    tell application "Spotify"
+        if not running then return ""
+        set US to ASCII character 31
+        set t to name of current track
+        set a to artist of current track
+        set al to album of current track
+        set art to artwork url of current track
+        set p to player state as string
+        set pos to player position
+        set dur to duration of current track
+        return t & US & a & US & al & US & art & US & p & US & pos & US & dur
+    end tell
+    """
+
+    /// Compiled once — recompiling the poll script every cycle was a steady CPU cost.
+    /// NSAppleScript is not thread-safe, so all use goes through `fetchLock`.
+    nonisolated(unsafe) private static var compiledFetch: NSAppleScript?
+    private static let fetchLock = NSLock()
+
     /// Returns track metadata if Spotify is running.
     static func fetchState() -> State? {
         guard isRunning else { return nil }
 
-        let script = """
-        tell application "Spotify"
-            if not running then return ""
-            set US to ASCII character 31
-            set t to name of current track
-            set a to artist of current track
-            set al to album of current track
-            set art to artwork url of current track
-            set p to player state as string
-            set pos to player position
-            set dur to duration of current track
-            return t & US & a & US & al & US & art & US & p & US & pos & US & dur
-        end tell
-        """
-        guard let raw = runAppleScript(script), !raw.isEmpty else { return nil }
+        let raw: String? = fetchLock.withLock {
+            if compiledFetch == nil {
+                let script = NSAppleScript(source: fetchSource)
+                var error: NSDictionary?
+                if script?.compileAndReturnError(&error) == true {
+                    compiledFetch = script
+                }
+            }
+            guard let script = compiledFetch else { return nil }
+            var error: NSDictionary?
+            let result = script.executeAndReturnError(&error)
+            return error == nil ? result.stringValue : nil
+        }
+        guard let raw, !raw.isEmpty else { return nil }
         let parts = raw.components(separatedBy: "\u{001F}")
         guard parts.count >= 7 else { return nil }
 

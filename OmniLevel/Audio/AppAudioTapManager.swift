@@ -14,8 +14,10 @@ public final class AppAudioTapManager: ObservableObject {
     /// Master bypass — all taps destroyed; dry system audio.
     @Published public private(set) var isOmniLevelBypassed = false
     @Published public private(set) var eqOverrideAppCount: Int = 0
-    /// Live per-app loudness (dBFS), published separately so meters stay snappy.
-    @Published public private(set) var liveLevelsdB: [pid_t: Float] = [:]
+    /// Live per-app loudness (dBFS). Lives in its own object so ~30 Hz meter updates only
+    /// redraw the meter views that observe it, not every view observing the manager.
+    public let liveLevels = LiveLevelFeed()
+    public var liveLevelsdB: [pid_t: Float] { liveLevels.levels }
 
     public let engine: AudioEngineController
     public let perAppEQ = PerAppEQStore()
@@ -60,12 +62,17 @@ public final class AppAudioTapManager: ObservableObject {
                 self?.refreshActiveAudioProcesses()
             }
         }
-        // ~30 Hz meter pump on .common so scrolling / popover idle still updates.
-        let meter = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            DispatchQueue.main.async {
-                self.updatePeakLevelsFromEngine()
-            }
+    }
+
+    /// Level metering only runs while UI is on screen. Visible meters pump faster on their
+    /// own; this low-rate timer keeps quiet-app tracking / Monitor stats fresh meanwhile.
+    public func setLiveMetersActive(_ active: Bool) {
+        meterTimer?.invalidate()
+        meterTimer = nil
+        guard active else { return }
+        updatePeakLevelsFromEngine()
+        let meter = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updatePeakLevelsFromEngine() }
         }
         RunLoop.main.add(meter, forMode: .common)
         meterTimer = meter
@@ -470,33 +477,32 @@ public final class AppAudioTapManager: ObservableObject {
         let peaks = engine.snapshotPeakLevels()
         let nodes = runningAppAudioNodes
         guard !nodes.isEmpty else {
-            if !liveLevelsdB.isEmpty { liveLevelsdB = [:] }
+            liveLevels.update([:])
             return
         }
 
+        let current = liveLevels.levels
         var next: [pid_t: Float] = [:]
         next.reserveCapacity(nodes.count)
         for node in nodes {
-            let prev = liveLevelsdB[node.id] ?? -60
+            let prev = current[node.id] ?? -60
             if node.isTapped, let live = peaks[node.id] {
                 next[node.id] = live
             } else {
                 next[node.id] = max(-60, prev - 4)
             }
         }
-        liveLevelsdB = next
+        liveLevels.update(next)
     }
 
     /// Snapshot + publish live levels. Call from a TimelineView while the Apps pane is visible
     /// (NSPopover often won't redraw from Timer-driven @Published alone).
-    @discardableResult
-    public func pumpLiveLevels() -> [pid_t: Float] {
+    public func pumpLiveLevels() {
         updatePeakLevelsFromEngine()
-        return liveLevelsdB
     }
 
     public func liveLeveldB(for pid: pid_t) -> Float {
-        liveLevelsdB[pid] ?? -60
+        liveLevels.levels[pid] ?? -60
     }
 
     // MARK: - Route rebuild
@@ -724,6 +730,23 @@ public final class AppAudioTapManager: ObservableObject {
             engineStatusMessage = lastError ?? "Stopped"
         default:
             engineStatusMessage = lastError ?? "Ready"
+        }
+    }
+}
+
+/// Per-app live loudness for meter views. Publishes only when a level moves visibly.
+@MainActor
+public final class LiveLevelFeed: ObservableObject {
+    @Published public private(set) var levels: [pid_t: Float] = [:]
+
+    func update(_ next: [pid_t: Float]) {
+        guard next.count == levels.count, next.keys.allSatisfy({ levels[$0] != nil }) else {
+            levels = next
+            return
+        }
+        for (pid, value) in next where abs(value - (levels[pid] ?? -60)) > 0.25 {
+            levels = next
+            return
         }
     }
 }

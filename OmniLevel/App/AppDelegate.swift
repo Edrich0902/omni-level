@@ -5,7 +5,6 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
-    private var notchController: NotchNowPlayingController?
     /// Menu-bar accessory apps break `.transient` after `makeKey`; we close on outside clicks.
     private var globalClickMonitor: Any?
     private var localClickMonitor: Any?
@@ -13,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     let tapManager = AppAudioTapManager()
     let nowPlaying = NowPlayingService()
     let presetStore = PresetStore()
+    private let popoverVisibility = PopoverVisibility()
     lazy var equalizerVM = EqualizerViewModel(
         dsp: tapManager.engine.equalizer,
         limiter: tapManager.engine.limiter,
@@ -53,12 +53,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
         popover.delegate = self
         popover.contentViewController = NSHostingController(
-            rootView: ContentView(
-                tapManager: tapManager,
-                equalizerVM: equalizerVM,
-                presetStore: presetStore,
-                nowPlaying: nowPlaying,
-                appList: tapManager.appList
+            rootView: PopoverRootView(
+                visibility: popoverVisibility,
+                content: ContentView(
+                    tapManager: tapManager,
+                    equalizerVM: equalizerVM,
+                    presetStore: presetStore,
+                    nowPlaying: nowPlaying,
+                    appList: tapManager.appList
+                )
             )
         )
         self.popover = popover
@@ -68,10 +71,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         if equalizerVM.didRestoreRealSession {
             equalizerVM.flushSessionToDisk()
         }
-
-        let notch = NotchNowPlayingController(service: nowPlaying)
-        notch.start()
-        notchController = notch
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -81,7 +80,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             equalizerVM.flushSessionToDisk()
         }
         removeClickMonitors()
-        notchController?.stop()
         nowPlaying.stop()
         tapManager.shutdown()
     }
@@ -94,6 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             closePopover()
         } else {
             popover.contentSize = NSSize(width: 480, height: 820)
+            setPopoverLive(true)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
             installClickMonitors()
@@ -169,5 +168,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     func popoverDidClose(_ notification: Notification) {
         removeClickMonitors()
+        setPopoverLive(false)
+    }
+
+    /// Popover UI keeps rendering while closed unless its meters are paused.
+    private func setPopoverLive(_ live: Bool) {
+        popoverVisibility.isShown = live
+        tapManager.setLiveMetersActive(live)
+        if live {
+            nowPlaying.start()
+        } else {
+            nowPlaying.stop()
+        }
     }
 }
