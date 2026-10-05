@@ -788,7 +788,11 @@ final class MonitorLive: ObservableObject {
 
 @MainActor
 final class MonitorFeed: ObservableObject {
-    func changed() { objectWillChange.send() }
+    /// Needs a @Published property: without one the synthesized `objectWillChange` is
+    /// recreated on every access and notifications reach no subscribers.
+    @Published private(set) var revision: UInt = 0
+
+    func changed() { revision &+= 1 }
 }
 
 /// Re-evaluates `content` whenever `feed` changes, without invalidating the parent view.
