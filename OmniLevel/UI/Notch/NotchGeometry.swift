@@ -65,10 +65,15 @@ struct NotchGeometry: Equatable, Sendable {
         )
     }
 
-    /// Hover pad around the drawn island only (not a large transparent slab).
-    func collapsedHoverFrame(wingExtension: CGFloat) -> CGRect {
-        collapsedFrame(wingExtension: wingExtension)
-            .insetBy(dx: -8, dy: -4)
+    /// Hover / expand trigger — camera housing only (no menu-bar wing pad).
+    /// Wings are visual chrome; expanding from them felt like an invisible hit area.
+    func collapsedHoverFrame(wingExtension _: CGFloat) -> CGRect {
+        CGRect(
+            x: screenFrame.midX - width / 2,
+            y: screenFrame.maxY - height,
+            width: width,
+            height: height
+        )
     }
 
     func expandedFrame(size: CGSize) -> CGRect {

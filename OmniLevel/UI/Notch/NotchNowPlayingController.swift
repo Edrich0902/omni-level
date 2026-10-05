@@ -59,8 +59,8 @@ final class NotchNowPlayingController: NSObject {
     private func buildPanelIfNeeded() {
         guard panel == nil else { return }
         geometry = NotchGeometry.detect()
-        // Stable expanded footprint — SwiftUI springs the visible island within it.
-        let frame = targetFrame(expanded: true)
+        // Start collapsed — never leave an expanded clear slab over the desktop.
+        let frame = targetFrame(expanded: false)
 
         let panel = NotchPanel(
             contentRect: frame,
@@ -76,7 +76,12 @@ final class NotchNowPlayingController: NSObject {
         tracking.autoresizingMask = [.width, .height]
         tracking.wantsLayer = true
         tracking.layer?.backgroundColor = NSColor.clear.cgColor
-        tracking.onMouseEntered = { [weak self] in self?.requestExpand(immediate: true) }
+        // Expand is pointer-poll only (tight camera hit). Tracking only helps collapse while open.
+        tracking.onMouseEntered = { [weak self] in
+            guard let self, self.isExpanded else { return }
+            self.pointerOutsideSince = nil
+            self.collapseWorkItem?.cancel()
+        }
         tracking.onMouseExited = { [weak self] in self?.notePointerMayHaveLeft() }
 
         let root = NotchNowPlayingRootView(viewModel: viewModel)
@@ -176,13 +181,17 @@ final class NotchNowPlayingController: NSObject {
         service.players.count > 1 ? 100 : 92
     }
 
-    /// Panel always uses the expanded footprint so SwiftUI can spring the island
-    /// open/closed inside a stable window (no AppKit frame tween fighting SwiftUI).
-    private func targetFrame(expanded _: Bool) -> CGRect {
-        geometry.expandedFrame(size: expandedContentSize())
+    /// Panel matches the visible island: collapsed size when closed so we never leave a
+    /// large clear window hanging over the desktop (that felt like an invisible hit zone).
+    private func targetFrame(expanded: Bool) -> CGRect {
+        if expanded {
+            return geometry.expandedFrame(size: expandedContentSize())
+        }
+        return geometry.collapsedFrame(wingExtension: collapsedWingExtension())
     }
 
     private func updateMousePassthrough() {
+        // Collapsed: never intercept clicks (menu bar / apps stay usable).
         panel?.ignoresMouseEvents = !isExpanded
     }
 
@@ -207,12 +216,26 @@ final class NotchNowPlayingController: NSObject {
     }
 
     private func collapsedHitFrame() -> CGRect {
+        // Camera housing only — not the menu-bar wings.
         geometry.collapsedHoverFrame(wingExtension: collapsedWingExtension())
     }
 
     private func expandedHitFrame() -> CGRect {
         guard let panel else { return targetFrame(expanded: true) }
-        return panel.frame.insetBy(dx: -6, dy: -8)
+        return panel.frame
+    }
+
+    /// True only when the cursor is over the physical notch cutout (screen coords).
+    private func pointerOnCollapsedHit(_ mouse: CGPoint) -> Bool {
+        let hit = collapsedHitFrame()
+        guard hit.contains(mouse) else { return false }
+        // Reject the rounded empty corners of the bounding box.
+        let local = CGPoint(x: mouse.x - hit.minX, y: hit.maxY - mouse.y)
+        let path = NotchShape(
+            topCornerRadius: 3,
+            bottomCornerRadius: min(10, max(6, geometry.height * 0.28))
+        ).path(in: CGRect(origin: .zero, size: hit.size))
+        return path.contains(local, eoFill: false)
     }
 
     private func requestExpand(immediate: Bool) {
@@ -241,13 +264,13 @@ final class NotchNowPlayingController: NSObject {
         pointerInCollapsedSince = nil
 
         isExpanded = true
-        // Soft settle open — slight overshoot reads like Apple’s DI expand.
+        // Grow the AppKit panel to the tray footprint first, then spring the hull.
+        reposition(animated: false)
         withAnimation(.spring(response: 0.40, dampingFraction: 0.78, blendDuration: 0)) {
             viewModel.isExpanded = true
         }
         lastLayoutSignature = layoutSignature(for: service.players)
         updateMousePassthrough()
-        // Panel footprint stays expanded; skip geometry churn mid-morph.
     }
 
     private func notePointerMayHaveLeft() {
@@ -303,6 +326,8 @@ final class NotchNowPlayingController: NSObject {
         collapseCooldownUntil = Date().addingTimeInterval(0.18)
         lastLayoutSignature = layoutSignature(for: service.players)
         updateMousePassthrough()
+        // Shrink panel back to the island so it can’t steal hover over the desktop.
+        reposition(animated: false)
     }
 
     private func startPointerTracking() {
@@ -365,15 +390,14 @@ final class NotchNowPlayingController: NSObject {
             return
         }
 
-        if collapsedHitFrame().contains(mouse) {
+        if pointerOnCollapsedHit(mouse) {
             if Date() < collapseCooldownUntil { return }
             if pointerInCollapsedSince == nil {
                 pointerInCollapsedSince = Date()
             }
-            if Date().timeIntervalSince(pointerInCollapsedSince!) >= 0.04 {
+            // Dwell so sweeping across the menu bar / near the notch doesn’t pop it open.
+            if Date().timeIntervalSince(pointerInCollapsedSince!) >= 0.2 {
                 requestExpand(immediate: true)
-            } else {
-                requestExpand(immediate: false)
             }
         } else {
             pointerInCollapsedSince = nil
@@ -411,7 +435,8 @@ final class NotchTrackingView: NSView {
 
     override func mouseEntered(with event: NSEvent) { onMouseEntered?() }
     override func mouseExited(with event: NSEvent) { onMouseExited?() }
-    override func mouseMoved(with event: NSEvent) { onMouseEntered?() }
+    // Do not treat mouseMoved as "entered" — that re-fired expand while skimming nearby.
+    override func mouseMoved(with event: NSEvent) {}
 
     override var isFlipped: Bool { true }
 
