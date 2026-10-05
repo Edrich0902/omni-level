@@ -383,8 +383,8 @@ private func eqCurveX(freq: Float, width: CGFloat) -> CGFloat {
 
 // MARK: - Live meters
 
-/// Owns the EQ pane's live data. Never publishes itself; its two feeds are observed only by
-/// the small views that draw them.
+/// Owns the EQ pane's live data. Never publishes; the meter and underlay views read it on
+/// their own `LiveTimeline` ticks, so the rest of the pane isn't rebuilt.
 @MainActor
 final class EQLiveMeters: ObservableObject {
     let bands = EQBandMeterFeed()
@@ -435,48 +435,30 @@ final class EQLiveMeters: ObservableObject {
 }
 
 @MainActor
-final class EQBandMeterFeed: ObservableObject {
+final class EQBandMeterFeed {
     struct Levels {
         var input = [CGFloat](repeating: 0, count: EqualizerDSP.bandCount)
         var output = [CGFloat](repeating: 0, count: EqualizerDSP.bandCount)
     }
 
-    @Published private(set) var levels = Levels()
+    private(set) var levels = Levels()
 
     func update(input: [CGFloat], output: [CGFloat]) {
-        guard Self.differ(levels.input, input) || Self.differ(levels.output, output) else { return }
         levels = Levels(input: input, output: output)
-    }
-
-    private static func differ(_ a: [CGFloat], _ b: [CGFloat]) -> Bool {
-        guard a.count == b.count else { return true }
-        for i in a.indices where abs(a[i] - b[i]) > 0.008 {
-            return true
-        }
-        return false
     }
 }
 
 @MainActor
-final class EQSpectrumFeed: ObservableObject {
+final class EQSpectrumFeed {
     struct Bins {
         var pre = [Float](repeating: -80, count: 48)
         var post = [Float](repeating: -80, count: 48)
     }
 
-    @Published private(set) var bins = Bins()
+    private(set) var bins = Bins()
 
     func update(pre: [Float], post: [Float]) {
-        guard Self.differ(bins.pre, pre) || Self.differ(bins.post, post) else { return }
         bins = Bins(pre: pre, post: post)
-    }
-
-    private static func differ(_ a: [Float], _ b: [Float]) -> Bool {
-        guard a.count == b.count else { return true }
-        for i in a.indices where abs(a[i] - b[i]) > 0.5 {
-            return true
-        }
-        return false
     }
 }
 
@@ -502,28 +484,32 @@ private struct EQMeterTicker: View {
 }
 
 private struct EQBandMeter: View {
-    @ObservedObject var feed: EQBandMeterFeed
+    let feed: EQBandMeterFeed
     let index: Int
 
     var body: some View {
-        let levels = feed.levels
-        GainSliderMeterBars(
-            inputLevel: index < levels.input.count ? levels.input[index] : 0,
-            outputLevel: index < levels.output.count ? levels.output[index] : 0
-        )
+        LiveTimeline {
+            let levels = feed.levels
+            GainSliderMeterBars(
+                inputLevel: index < levels.input.count ? levels.input[index] : 0,
+                outputLevel: index < levels.output.count ? levels.output[index] : 0
+            )
+        }
     }
 }
 
 private struct EQSpectrumUnderlay: View {
-    @ObservedObject var feed: EQSpectrumFeed
+    let feed: EQSpectrumFeed
 
     var body: some View {
-        let bins = feed.bins
-        Canvas { context, size in
-            Self.draw(context: context, size: size, values: bins.pre, color: OmniTheme.accent.opacity(0.12))
-            Self.draw(context: context, size: size, values: bins.post, color: OmniTheme.amber.opacity(0.22))
+        LiveTimeline {
+            let bins = feed.bins
+            Canvas { context, size in
+                Self.draw(context: context, size: size, values: bins.pre, color: OmniTheme.accent.opacity(0.12))
+                Self.draw(context: context, size: size, values: bins.post, color: OmniTheme.amber.opacity(0.22))
+            }
+            .allowsHitTesting(false)
         }
-        .allowsHitTesting(false)
     }
 
     private static func draw(context: GraphicsContext, size: CGSize, values: [Float], color: Color) {

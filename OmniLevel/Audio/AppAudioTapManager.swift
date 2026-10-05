@@ -14,8 +14,8 @@ public final class AppAudioTapManager: ObservableObject {
     /// Master bypass — all taps destroyed; dry system audio.
     @Published public private(set) var isOmniLevelBypassed = false
     @Published public private(set) var eqOverrideAppCount: Int = 0
-    /// Live per-app loudness (dBFS). Lives in its own object so ~30 Hz meter updates only
-    /// redraw the meter views that observe it, not every view observing the manager.
+    /// Live per-app loudness (dBFS). Not published, so ~30 Hz meter updates only redraw
+    /// the meter views that read it, not every view observing the manager.
     public let liveLevels = LiveLevelFeed()
     public var liveLevelsdB: [pid_t: Float] { liveLevels.levels }
 
@@ -734,19 +734,12 @@ public final class AppAudioTapManager: ObservableObject {
     }
 }
 
-/// Per-app live loudness for meter views. Publishes only when a level moves visibly.
+/// Per-app live loudness, read by meter views on their own display ticks.
 @MainActor
-public final class LiveLevelFeed: ObservableObject {
-    @Published public private(set) var levels: [pid_t: Float] = [:]
+public final class LiveLevelFeed {
+    public private(set) var levels: [pid_t: Float] = [:]
 
     func update(_ next: [pid_t: Float]) {
-        guard next.count == levels.count, next.keys.allSatisfy({ levels[$0] != nil }) else {
-            levels = next
-            return
-        }
-        for (pid, value) in next where abs(value - (levels[pid] ?? -60)) > 0.25 {
-            levels = next
-            return
-        }
+        levels = next
     }
 }

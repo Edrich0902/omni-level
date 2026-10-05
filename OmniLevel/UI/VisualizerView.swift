@@ -67,18 +67,18 @@ struct VisualizerView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 header
-                LiveSection(feed: live.dashboard) { meterDashboard }
+                LiveTimeline { meterDashboard }
                 modeChrome
-                LiveSection(feed: live.surface) {
+                LiveTimeline {
                     spectrumSurface
                         .frame(maxWidth: .infinity)
                         .frame(height: 200)
                 }
-                LiveSection(feed: live.dashboard) {
+                LiveTimeline {
                     loudnessHistory
                         .frame(height: 56)
-                    sessionFooter
                 }
+                LiveTimeline(minimumInterval: 0.25) { sessionFooter }
             }
             .padding(16)
         }
@@ -424,7 +424,6 @@ struct VisualizerView: View {
                     engine.limiter.resetGRSession()
                     live.mix = engine.mixAnalyzer.snapshot()
                     live.gr = engine.limiter.snapshotGR()
-                    live.dashboard.changed()
                 }
                 .buttonStyle(.plain)
                 .font(.system(size: 10, weight: .semibold, design: .rounded))
@@ -672,7 +671,6 @@ struct VisualizerView: View {
         live.smoothPeakR += (CGFloat(dbToUnit(mix.samplePeakHoldRight)) - live.smoothPeakR) * ap
         live.smoothTPL += (CGFloat(dbToUnit(mix.truePeakHoldLeft)) - live.smoothTPL) * ap
         live.smoothTPR += (CGFloat(dbToUnit(mix.truePeakHoldRight)) - live.smoothTPR) * ap
-        live.dashboard.changed()
 
         switch mode {
         case .spectrum, .liquid, .mirror:
@@ -697,7 +695,6 @@ struct VisualizerView: View {
                 live.eqCurveSignature = signature
             }
         }
-        live.surface.changed()
     }
 
     private func appendSpectroColumn() {
@@ -760,13 +757,10 @@ struct VisualizerView: View {
 
 // MARK: - Live state
 
-/// Display-rate Monitor data. Never publishes itself; `dashboard` / `surface` notify only
-/// the sections that draw them.
+/// Display-rate Monitor data, written by the ticker and read by the `LiveTimeline`
+/// sections. Never publishes, so ticks don't rebuild the rest of the view.
 @MainActor
 final class MonitorLive: ObservableObject {
-    let dashboard = MonitorFeed()
-    let surface = MonitorFeed()
-
     var bars: [Float] = Array(repeating: -80, count: 40)
     var peaks: [Float] = Array(repeating: -80, count: 40)
     var rtaBars: [Float] = Array(repeating: -80, count: SpectrumAnalyzer.thirdOctaveCenters.count)
@@ -784,23 +778,4 @@ final class MonitorLive: ObservableObject {
     var smoothTPL: CGFloat = 0
     var smoothTPR: CGFloat = 0
     var lastTick: Date = .now
-}
-
-@MainActor
-final class MonitorFeed: ObservableObject {
-    /// Needs a @Published property: without one the synthesized `objectWillChange` is
-    /// recreated on every access and notifications reach no subscribers.
-    @Published private(set) var revision: UInt = 0
-
-    func changed() { revision &+= 1 }
-}
-
-/// Re-evaluates `content` whenever `feed` changes, without invalidating the parent view.
-private struct LiveSection<Content: View>: View {
-    @ObservedObject var feed: MonitorFeed
-    @ViewBuilder var content: () -> Content
-
-    var body: some View {
-        content()
-    }
 }

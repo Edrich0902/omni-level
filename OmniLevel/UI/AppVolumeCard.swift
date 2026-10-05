@@ -460,29 +460,30 @@ struct AppVolumeCard: View {
 
 /// Meter + dB caption for one app; the only part of a card that redraws at meter rate.
 private struct AppLiveLevelRow: View {
-    @ObservedObject var feed: LiveLevelFeed
+    let feed: LiveLevelFeed
     let pid: pid_t
     let isActive: Bool
 
-    private var leveldB: Float { feed.levels[pid] ?? -60 }
+    var body: some View {
+        LiveTimeline {
+            let leveldB = feed.levels[pid] ?? -60
+            HStack(spacing: 8) {
+                AppPeakMeter(leveldB: leveldB, isActive: isActive)
+                    .frame(height: 10)
+                Text(Self.caption(leveldB: leveldB, isActive: isActive))
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(OmniTheme.textSecondary)
+                    .monospacedDigit()
+                    .frame(width: 44, alignment: .trailing)
+                    .contentTransition(.identity)
+            }
+        }
+    }
 
-    private var caption: String {
+    private static func caption(leveldB: Float, isActive: Bool) -> String {
         guard isActive else { return "—" }
         if leveldB <= -48 { return "quiet" }
         return String(format: "%.0f", leveldB)
-    }
-
-    var body: some View {
-        HStack(spacing: 8) {
-            AppPeakMeter(leveldB: leveldB, isActive: isActive)
-                .frame(height: 10)
-            Text(caption)
-                .font(.system(size: 10, weight: .bold, design: .rounded))
-                .foregroundStyle(OmniTheme.textSecondary)
-                .monospacedDigit()
-                .frame(width: 44, alignment: .trailing)
-                .contentTransition(.identity)
-        }
     }
 }
 
