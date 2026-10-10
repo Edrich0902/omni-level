@@ -88,15 +88,7 @@ public final class ProcessTapIO: @unchecked Sendable {
     @available(macOS 14.2, *)
     @discardableResult
     public func syncAppTaps(clusters: [TapCluster]) throws -> [AppTapHandle] {
-        let ownPID = ProcessInfo.processInfo.processIdentifier
-        let desiredClusters = clusters
-            .filter { $0.keyPID != ownPID }
-            .map { cluster in
-                TapCluster(
-                    keyPID: cluster.keyPID,
-                    audioPIDs: cluster.audioPIDs.filter { $0 != ownPID }
-                )
-            }
+        let desiredClusters = Self.normalized(clusters)
         let desiredKeys = Set(desiredClusters.map(\.keyPID))
         let desiredByKey = Dictionary(uniqueKeysWithValues: desiredClusters.map { ($0.keyPID, $0) })
 
@@ -141,6 +133,36 @@ public final class ProcessTapIO: @unchecked Sendable {
         let snapshot = kept
         lock.withLock { appTaps = snapshot }
         return snapshot
+    }
+
+    /// Keys whose tap (and aggregate device) `syncAppTaps(clusters:)` would destroy: removed
+    /// apps and apps whose process membership changed. Input units bound to those aggregates
+    /// must stop first — an AUHAL whose device disappears falls back to the default input (mic).
+    public func tapKeysToReplace(clusters: [TapCluster]) -> Set<pid_t> {
+        let desiredByKey = Dictionary(
+            uniqueKeysWithValues: Self.normalized(clusters).map { ($0.keyPID, Set($0.audioPIDs)) }
+        )
+        let existing = lock.withLock { appTaps }
+        var doomed = Set<pid_t>()
+        for handle in existing {
+            guard let desired = desiredByKey[handle.pid], desired == Set(handle.audioPIDs) else {
+                doomed.insert(handle.pid)
+                continue
+            }
+        }
+        return doomed
+    }
+
+    private static func normalized(_ clusters: [TapCluster]) -> [TapCluster] {
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        return clusters
+            .filter { $0.keyPID != ownPID }
+            .map { cluster in
+                TapCluster(
+                    keyPID: cluster.keyPID,
+                    audioPIDs: cluster.audioPIDs.filter { $0 != ownPID }
+                )
+            }
     }
 
     public func destroyAllAppTaps() {

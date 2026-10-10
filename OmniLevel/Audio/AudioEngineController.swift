@@ -100,6 +100,9 @@ public final class AudioEngineController: ObservableObject {
         let pid: pid_t
         let ring: StereoRingBuffer
         var unit: AudioComponentInstance?
+        /// The tap aggregate `unit` must stay bound to; anything else (e.g. the default
+        /// input after the aggregate is destroyed) would be a microphone.
+        var deviceID: AudioObjectID = kAudioObjectUnknown
         var left: UnsafeMutablePointer<Float>
         var right: UnsafeMutablePointer<Float>
         let maxFrames: Int
@@ -365,6 +368,14 @@ public final class AudioEngineController: ObservableObject {
 
         let desired = Set(routedClusters.map(\.keyPID))
         let current = Set(streamContexts.map(\.pid))
+
+        // Stop capture on every aggregate the sync is about to destroy *before* destroying it.
+        var nextStreams = streamContexts
+        let doomed = processTaps.tapKeysToReplace(clusters: routedClusters)
+        let retiring = nextStreams.filter { doomed.contains($0.pid) }
+        retireStreams(retiring, keepMixerFor: desired)
+        nextStreams.removeAll { doomed.contains($0.pid) }
+
         let handles = try processTaps.syncAppTaps(clusters: routedClusters)
         let handleByPID = Dictionary(uniqueKeysWithValues: handles.map { ($0.pid, $0) })
         let liveKeys = Set(handles.map(\.pid))
@@ -374,21 +385,11 @@ public final class AudioEngineController: ObservableObject {
         let asbd = Self.stereoFloatNonInterleavedASBD(sampleRate: rate)
         let ringCap = Int(max(rate, 48_000) * 0.45)
 
-        var nextStreams = streamContexts
-        let removed = nextStreams.filter { !liveKeys.contains($0.pid) }
-        for stream in removed {
-            if let unit = stream.unit {
-                AudioOutputUnitStop(unit)
-                AudioUnitUninitialize(unit)
-                AudioComponentInstanceDispose(unit)
-            }
-            stream.unit = nil
-            stream.ring.reset()
-            mixer.removeStream(stream.pid)
-            // Keep EQ override DSP warm — app may re-route (solo / On-Off) shortly.
-        }
-        nextStreams.removeAll { !liveKeys.contains($0.pid) }
-        Self.releaseLater(removed)
+        // Anything not bound to its app's current aggregate goes too (defensive).
+        let stale = nextStreams.filter { handleByPID[$0.pid]?.aggregateDeviceID != $0.deviceID }
+        retireStreams(stale, keepMixerFor: liveKeys)
+        nextStreams.removeAll { handleByPID[$0.pid]?.aggregateDeviceID != $0.deviceID }
+        Self.releaseLater(retiring + stale)
 
         let existing = Set(nextStreams.map(\.pid))
         for pid in liveKeys.sorted() where !existing.contains(pid) {
@@ -398,27 +399,7 @@ public final class AudioEngineController: ObservableObject {
 
             let stream = StreamContext(pid: handle.pid, ringCapacity: ringCap)
             stream.destinationKey = normalizedDestinationKey(streamRouteProvider?(handle.pid))
-            let unit = try makeHALUnit()
-            try setEnableIO(unit, input: true, output: false)
-            try setCurrentDevice(unit, handle.aggregateDeviceID)
-            try setMaxFrames(unit, frames: UInt32(stream.maxFrames))
-            try setStreamFormat(unit, scope: kAudioUnitScope_Output, element: 1, asbd: asbd)
-
-            stream.unit = unit
-            let refCon = Unmanaged.passUnretained(stream).toOpaque()
-            var inputCB = AURenderCallbackStruct(inputProc: streamInputCallback, inputProcRefCon: refCon)
-            try OSStatusCheck(
-                AudioUnitSetProperty(
-                    unit,
-                    kAudioOutputUnitProperty_SetInputCallback,
-                    kAudioUnitScope_Global,
-                    0,
-                    &inputCB,
-                    UInt32(MemoryLayout<AURenderCallbackStruct>.size)
-                ),
-                "SetInputCallback pid=\(handle.pid)"
-            )
-            try OSStatusCheck(AudioUnitInitialize(unit), "Init input pid=\(handle.pid)")
+            let unit = try attachTapInput(stream, to: handle.aggregateDeviceID, asbd: asbd)
             try OSStatusCheck(AudioOutputUnitStart(unit), "Start input pid=\(handle.pid)")
             nextStreams.append(stream)
         }
@@ -632,27 +613,7 @@ public final class AudioEngineController: ObservableObject {
 
             let stream = StreamContext(pid: handle.pid, ringCapacity: ringCap)
             stream.destinationKey = normalizedDestinationKey(streamRouteProvider?(handle.pid))
-            let unit = try makeHALUnit()
-            try setEnableIO(unit, input: true, output: false)
-            try setCurrentDevice(unit, handle.aggregateDeviceID)
-            try setMaxFrames(unit, frames: UInt32(stream.maxFrames))
-            try setStreamFormat(unit, scope: kAudioUnitScope_Output, element: 1, asbd: asbd)
-
-            stream.unit = unit
-            let refCon = Unmanaged.passUnretained(stream).toOpaque()
-            var inputCB = AURenderCallbackStruct(inputProc: streamInputCallback, inputProcRefCon: refCon)
-            try OSStatusCheck(
-                AudioUnitSetProperty(
-                    unit,
-                    kAudioOutputUnitProperty_SetInputCallback,
-                    kAudioUnitScope_Global,
-                    0,
-                    &inputCB,
-                    UInt32(MemoryLayout<AURenderCallbackStruct>.size)
-                ),
-                "SetInputCallback pid=\(handle.pid)"
-            )
-            try OSStatusCheck(AudioUnitInitialize(unit), "Init input pid=\(handle.pid)")
+            try attachTapInput(stream, to: handle.aggregateDeviceID, asbd: asbd)
             streams.append(stream)
         }
 
@@ -802,6 +763,91 @@ public final class AudioEngineController: ObservableObject {
         bus.unit = outUnit
     }
 
+    /// Creates an initialized (not started) capture unit for `stream` bound to a tap
+    /// aggregate. Disposed on any failure so no half-configured unit is left on the
+    /// default input device (enabling input binds the unit to the system mic until
+    /// `CurrentDevice` is set).
+    @discardableResult
+    private func attachTapInput(
+        _ stream: StreamContext,
+        to aggregateID: AudioObjectID,
+        asbd: AudioStreamBasicDescription
+    ) throws -> AudioComponentInstance {
+        let unit = try makeHALUnit()
+        do {
+            try setEnableIO(unit, input: true, output: false)
+            try setCurrentDevice(unit, aggregateID)
+            guard Self.currentDevice(of: unit) == aggregateID else {
+                throw NSError(domain: "OmniLevel", code: 3, userInfo: [
+                    NSLocalizedDescriptionKey: "Capture unit not bound to tap pid=\(stream.pid)"
+                ])
+            }
+            try setMaxFrames(unit, frames: UInt32(stream.maxFrames))
+            try setStreamFormat(unit, scope: kAudioUnitScope_Output, element: 1, asbd: asbd)
+
+            let refCon = Unmanaged.passUnretained(stream).toOpaque()
+            var inputCB = AURenderCallbackStruct(inputProc: streamInputCallback, inputProcRefCon: refCon)
+            try OSStatusCheck(
+                AudioUnitSetProperty(
+                    unit,
+                    kAudioOutputUnitProperty_SetInputCallback,
+                    kAudioUnitScope_Global,
+                    0,
+                    &inputCB,
+                    UInt32(MemoryLayout<AURenderCallbackStruct>.size)
+                ),
+                "SetInputCallback pid=\(stream.pid)"
+            )
+            try OSStatusCheck(AudioUnitInitialize(unit), "Init input pid=\(stream.pid)")
+        } catch {
+            AudioComponentInstanceDispose(unit)
+            throw error
+        }
+        stream.unit = unit
+        stream.deviceID = aggregateID
+        return unit
+    }
+
+    /// Stops and disposes capture units. Mixer state (volume / mute) is kept for PIDs in
+    /// `keepMixerFor` because those streams are about to be recreated.
+    private func retireStreams(_ streams: [StreamContext], keepMixerFor: Set<pid_t>) {
+        for stream in streams {
+            if let unit = stream.unit {
+                AudioOutputUnitStop(unit)
+                AudioUnitUninitialize(unit)
+                AudioComponentInstanceDispose(unit)
+            }
+            stream.unit = nil
+            stream.deviceID = kAudioObjectUnknown
+            stream.ring.reset()
+            if !keepMixerFor.contains(stream.pid) {
+                mixer.removeStream(stream.pid)
+            }
+        }
+    }
+
+    private static func currentDevice(of unit: AudioComponentInstance) -> AudioObjectID {
+        var device = AudioObjectID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &device, &size)
+        return device
+    }
+
+    /// Stops any capture unit that is no longer bound to its tap aggregate (e.g. the HAL
+    /// moved it to the default input). Returns true if anything was stopped.
+    private func stopMisboundCaptureUnits() -> Bool {
+        var stopped = false
+        for stream in streamContexts {
+            guard let unit = stream.unit else { continue }
+            let bound = Self.currentDevice(of: unit)
+            guard bound != stream.deviceID else { continue }
+            log.error("capture pid=\(stream.pid) moved to device \(bound) (expected \(stream.deviceID)) — stopped")
+            retireStreams([stream], keepMixerFor: [stream.pid])
+            stopped = true
+        }
+        return stopped
+    }
+
     private func teardownUnits() {
         for bus in outputBuses.values {
             if let unit = bus.unit {
@@ -847,6 +893,10 @@ public final class AudioEngineController: ObservableObject {
         ioStatusTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let shared = self.sharedMix else { return }
+                if self.stopMisboundCaptureUnits() {
+                    self.startSystemRouting(routedClusters: self.currentRoutedClusters())
+                    return
+                }
                 let streams = shared.streams
                 let totalCB = streams.reduce(UInt64(0)) { $0 + $1.callbacks }
                 let failing = streams.filter { $0.lastStatus != noErr }.count
